@@ -6,7 +6,7 @@ import '../../services/api_service.dart';
 import '../../widgets/common.dart';
 import '../common/profile_view.dart';
 import '../../widgets/class_form.dart';
-import '../common/class_members_screen.dart';
+import '../teacher/teacher_class_screen.dart';
 
 // Trang quản trị: người dùng, môn học, lớp học và tài khoản.
 class AdminHomeScreen extends StatefulWidget {
@@ -555,9 +555,10 @@ class _ClassesTabState extends State<_ClassesTab> {
         emptyTitle: 'Chưa có lớp học',
         emptyMessage: 'Tạo môn học và tài khoản giảng viên trước, rồi bấm "Thêm".',
         itemBuilder: (context, c) => TapCard(
+          // Admin vào màn hình lớp giống giảng viên: lịch học, mở điểm danh, QR, đơn nghỉ, báo cáo vắng, sinh viên.
           onTap: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => ClassMembersScreen(classId: c['id'] as int, className: c['name'].toString())),
+            MaterialPageRoute(builder: (_) => TeacherClassScreen(classId: c['id'] as int, className: c['name'].toString())),
           ).then((_) => _reload()),
           padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
           child: Row(
@@ -578,7 +579,7 @@ class _ClassesTabState extends State<_ClassesTab> {
                     InfoLine(icon: Icons.person_outline_rounded, text: 'GV: ${c['teacher']}'),
                     InfoLine(
                       icon: Icons.groups_outlined,
-                      text: '${c['studentCount']} sinh viên • Chạm để quản lý sinh viên',
+                      text: '${c['studentCount']} sinh viên • Chạm để quản lý lớp và điểm danh',
                     ),
                   ],
                 ),

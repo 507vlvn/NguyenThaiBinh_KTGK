@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ui.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/class_form.dart';
 import '../../widgets/class_info_card.dart';
@@ -58,15 +59,19 @@ class _TeacherClassScreenState extends State<TeacherClassScreen> {
     final api = context.read<ApiService>();
     final detail = _detail;
     if (detail == null) return;
+    // Admin được đổi giảng viên phụ trách; giảng viên thì không.
+    final isAdmin = context.read<AuthProvider>().role == 'Admin';
     final List<Json> subjects;
+    List<Json>? teachers;
     try {
       subjects = await api.subjects();
+      if (isAdmin) teachers = (await api.users()).where((u) => u['role'] == 'GiangVien').toList();
     } catch (e) {
       if (mounted) showError(context, e);
       return;
     }
     if (!mounted) return;
-    final data = await showClassForm(context, cls: detail, subjects: subjects);
+    final data = await showClassForm(context, cls: detail, subjects: subjects, teachers: teachers);
     if (data == null || !mounted) return;
     try {
       await api.updateClass(widget.classId, data);
