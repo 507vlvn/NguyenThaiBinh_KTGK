@@ -6,6 +6,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
         android:label="Điểm danh SV - Nguyễn Thái Bình"
+        android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

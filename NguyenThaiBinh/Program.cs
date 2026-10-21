@@ -8,6 +8,10 @@ using NguyenThaiBinh.model;
 using NguyenThaiBinh.Repositories;
 using NguyenThaiBinh.Services;
 
+// Nạp file .env (tìm từ thư mục hiện tại lên các thư mục cha). Giá trị trong .env được đưa vào biến môi trường,
+// nên ghi đè cấu hình trong appsettings.json và user secrets.
+DotNetEnv.Env.TraversePath().Load();
+
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
 var jwtKey = config["Jwt:Key"] ?? throw new InvalidOperationException("Thiếu Jwt:Key (đặt bằng user secrets).");
@@ -53,7 +57,8 @@ using (var scope = app.Services.CreateScope())
     await DbSeeder.SeedAsync(db, config, scope.ServiceProvider.GetRequiredService<PasswordHasher<AppUser>>());
 }
 
-if (app.Environment.IsDevelopment())
+// Swagger bật khi Development hoặc khi Swagger:Enabled = true trong cấu hình.
+if (app.Environment.IsDevelopment() || config.GetValue("Swagger:Enabled", false))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
