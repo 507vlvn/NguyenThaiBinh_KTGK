@@ -31,7 +31,25 @@ String formatTime(String iso) {
   return '${_two(d.hour)}:${_two(d.minute)}';
 }
 
-// "Còn 12 phút" cho buổi có giờ kết thúc; null nếu không có giờ kết thúc hoặc đã hết giờ.
+const _weekdays = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
+
+// "Thứ 2, 26/10/2026 • 07:00 - 10:30" cho giờ học của một buổi.
+String formatSchedule(Object startsAt, Object? endsAt) {
+  final s = parseApiDate(startsAt.toString());
+  final day = '${_weekdays[s.weekday - 1]}, ${_two(s.day)}/${_two(s.month)}/${s.year}';
+  final end = endsAt == null ? '' : ' - ${formatTime(endsAt.toString())}';
+  return '$day • ${_two(s.hour)}:${_two(s.minute)}$end';
+}
+
+// "Hôm nay", "Ngày mai", hoặc null.
+String? relativeDayLabel(Object startsAt) {
+  final s = parseApiDate(startsAt.toString());
+  final today = DateTime.now();
+  final d = DateTime(s.year, s.month, s.day).difference(DateTime(today.year, today.month, today.day)).inDays;
+  return switch (d) { 0 => 'Hôm nay', 1 => 'Ngày mai', _ => null };
+}
+
+// "Còn 12 phút" cho buổi có hạn điểm danh; null nếu không có hạn hoặc đã hết giờ.
 String? remainingLabel(Object? endsAt) {
   if (endsAt == null) return null;
   final left = parseApiDate(endsAt.toString()).difference(DateTime.now());

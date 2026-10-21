@@ -98,10 +98,10 @@ class _SessionQrScreenState extends State<SessionQrScreen> {
               style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
-            if (widget.session['endsAt'] != null) ...[
+            if (widget.session['checkInUntil'] != null) ...[
               const SizedBox(height: 8),
               Text(
-                remainingLabel(widget.session['endsAt']) ?? 'Đã hết thời gian điểm danh',
+                remainingLabel(widget.session['checkInUntil']) ?? 'Đã hết thời gian điểm danh',
                 style: text.titleMedium?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
                 textAlign: TextAlign.center,
               ),

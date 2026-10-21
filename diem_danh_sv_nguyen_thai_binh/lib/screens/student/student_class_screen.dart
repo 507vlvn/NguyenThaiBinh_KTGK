@@ -8,10 +8,11 @@ import '../../core/ui.dart';
 import '../../services/api_service.dart';
 import '../../widgets/class_info_card.dart';
 import '../../widgets/common.dart';
+import '../../widgets/session_widgets.dart';
 import 'leave_request_screen.dart';
 import 'scan_qr_screen.dart';
 
-// Màn hình lớp của sinh viên: thông tin lớp, thống kê đi học và danh sách buổi học.
+// Màn hình lớp của sinh viên: thông tin lớp, thống kê đi học và lịch buổi học.
 class StudentClassScreen extends StatefulWidget {
   const StudentClassScreen({super.key, required this.classId, required this.className});
 
@@ -32,18 +33,12 @@ class _StudentClassScreenState extends State<StudentClassScreen> {
     _future = _load();
   }
 
-  // Tải chi tiết lớp cùng lúc với danh sách buổi; buổi đang mở lên đầu.
+  // Tải chi tiết lớp cùng lúc với lịch buổi học, rồi chia nhóm.
   Future<List<Json>> _load() async {
     final api = context.read<ApiService>();
     final results = await Future.wait([api.classDetail(widget.classId), api.sessions(widget.classId)]);
-    final detail = results[0] as Json;
-    final list = results[1] as List<Json>;
-    list.sort((a, b) {
-      final open = (b['isOpen'] == true ? 1 : 0) - (a['isOpen'] == true ? 1 : 0);
-      return open != 0 ? open : b['startsAt'].toString().compareTo(a['startsAt'].toString());
-    });
-    if (mounted) setState(() => _detail = detail);
-    return list;
+    if (mounted) setState(() => _detail = results[0] as Json);
+    return groupSessions(results[1] as List<Json>);
   }
 
   Future<void> _reload() async {
@@ -119,7 +114,7 @@ class _StudentClassScreenState extends State<StudentClassScreen> {
         context,
         success: true,
         title: 'Điểm danh thành công',
-        message: 'Bạn đã điểm danh buổi "${session['title']}". Khoảng cách tới lớp: ${res['distanceMeters']} m.',
+        message: 'Bạn đã điểm danh "${session['title']}". Khoảng cách tới lớp: ${res['distanceMeters']} m.',
       );
       _reload();
     } catch (e) {
@@ -141,7 +136,7 @@ class _StudentClassScreenState extends State<StudentClassScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Tình hình đi học (${stats['totalSessions']} buổi đã kết thúc)', style: text.titleSmall),
+            Text('Tình hình đi học (${stats['totalSessions']} buổi đã điểm danh)', style: text.titleSmall),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -185,105 +180,117 @@ class _StudentClassScreenState extends State<StudentClassScreen> {
   }
 
   // Trạng thái của sinh viên trong một buổi.
-  StatusChip _statusChip(Json s, bool open) {
+  StatusChip _statusChip(Json s) {
     if (s['checkedIn'] == true) {
       return const StatusChip(label: 'Có mặt', icon: Icons.check_circle_rounded, tone: StatusTone.success);
     }
     final leave = s['leaveStatus'];
     if (leave == 'Approved') return const StatusChip(label: 'Có phép', icon: Icons.assignment_turned_in_rounded, tone: StatusTone.info);
     if (leave == 'Pending') return const StatusChip(label: 'Chờ duyệt đơn', icon: Icons.hourglass_top_rounded, tone: StatusTone.warning);
-    if (open) return const StatusChip(label: 'Đang mở', icon: Icons.lock_open_rounded, tone: StatusTone.info);
-    return const StatusChip(label: 'Vắng', icon: Icons.cancel_rounded, tone: StatusTone.danger);
+    switch (s['state']) {
+      case 'Open':
+        return const StatusChip(label: 'Đang điểm danh', icon: Icons.lock_open_rounded, tone: StatusTone.info);
+      case 'Ended':
+        return const StatusChip(label: 'Vắng', icon: Icons.cancel_rounded, tone: StatusTone.danger);
+      default:
+        final started = parseApiDate(s['startsAt'].toString()).isBefore(DateTime.now());
+        return started
+            ? const StatusChip(label: 'Chưa mở điểm danh', icon: Icons.schedule_rounded)
+            : const StatusChip(label: 'Sắp diễn ra', icon: Icons.event_outlined);
+    }
+  }
+
+  Widget _sessionCard(Json s) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final open = s['state'] == 'Open';
+    final checkedIn = s['checkedIn'] == true;
+    final remaining = open ? remainingLabel(s['checkInUntil']) : null;
+    final relative = relativeDayLabel(s['startsAt']);
+    final room = _detail?['room']?.toString();
+    final canAskLeave = !checkedIn && s['leaveStatus'] == null && s['state'] != 'Ended';
+    return Card(
+      shape: open && !checkedIn
+          ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: scheme.primary, width: 2))
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    relative == null ? s['title'].toString() : '${s['title']} • $relative',
+                    style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                _statusChip(s),
+              ],
+            ),
+            InfoLine(icon: Icons.schedule_rounded, text: formatSchedule(s['startsAt'], s['endsAt'])),
+            if (room != null && room.isNotEmpty) InfoLine(icon: Icons.meeting_room_outlined, text: room),
+            if (remaining != null) InfoLine(icon: Icons.timer_outlined, text: '$remaining để điểm danh'),
+            if (s['leaveStatus'] == 'Rejected') const InfoLine(icon: Icons.info_outline_rounded, text: 'Đơn xin nghỉ bị từ chối'),
+            if ((open && !checkedIn) || canAskLeave) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  if (open && !checkedIn) ...[
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => _checkIn(s),
+                        icon: const Icon(Icons.qr_code_scanner_rounded),
+                        label: const Text('Điểm danh'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  if (canAskLeave)
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => LeaveRequestScreen(sessionId: s['id'] as int, sessionTitle: s['title'].toString()),
+                            ),
+                          );
+                          _reload();
+                        },
+                        child: const Text('Xin nghỉ'),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final scheme = Theme.of(context).colorScheme;
+    final next = _detail?['nextSession'];
     return Scaffold(
       appBar: AppBar(title: Text(widget.className)),
       body: AsyncListView(
         future: _future,
         onRefresh: _reload,
         emptyIcon: Icons.event_busy_outlined,
-        emptyTitle: 'Chưa có buổi học nào',
-        emptyMessage: 'Khi giảng viên mở buổi học, nút "Điểm danh" sẽ hiện ở đây. Kéo xuống để làm mới.',
+        emptyTitle: 'Lớp chưa có lịch học',
+        emptyMessage: 'Giảng viên chưa lên lịch buổi học cho lớp này. Kéo xuống để làm mới.',
         headerBuilder: (items) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (_detail != null) ClassInfoCard(detail: _detail!),
+            if (next != null) ...[const SizedBox(height: 12), NextSessionCard(session: next as Json)],
             if (_detail?['myStats'] != null) ...[const SizedBox(height: 12), _statsCard(_detail!['myStats'] as Json)],
-            const SizedBox(height: 24),
-            Text('Buổi học (${items.length})', style: text.titleMedium),
           ],
         ),
-        itemBuilder: (context, s) {
-          final open = s['isOpen'] == true;
-          final checkedIn = s['checkedIn'] == true;
-          final remaining = open ? remainingLabel(s['endsAt']) : null;
-          final endsAt = s['endsAt'];
-          return Card(
-            shape: open && !checkedIn
-                ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: scheme.primary, width: 2))
-                : null,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(child: Text(s['title'].toString(), style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
-                      _statusChip(s, open),
-                    ],
-                  ),
-                  InfoLine(
-                    icon: Icons.event_outlined,
-                    text: endsAt == null
-                        ? formatDateTime(s['startsAt'].toString())
-                        : '${formatDateTime(s['startsAt'].toString())} - ${formatTime(endsAt.toString())}',
-                  ),
-                  if (remaining != null) InfoLine(icon: Icons.timer_outlined, text: '$remaining để điểm danh'),
-                  InfoLine(icon: Icons.near_me_outlined, text: 'Phạm vi điểm danh: ${(s['radiusMeters'] as num).round()} m'),
-                  if (s['leaveStatus'] == 'Rejected')
-                    const InfoLine(icon: Icons.info_outline_rounded, text: 'Đơn xin nghỉ bị từ chối'),
-                  if ((open && !checkedIn) || (!checkedIn && s['leaveStatus'] == null)) ...[
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        if (open && !checkedIn) ...[
-                          Expanded(
-                            child: FilledButton.icon(
-                              onPressed: () => _checkIn(s),
-                              icon: const Icon(Icons.qr_code_scanner_rounded),
-                              label: const Text('Điểm danh'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                        ],
-                        if (s['leaveStatus'] == null)
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () async {
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => LeaveRequestScreen(sessionId: s['id'] as int, sessionTitle: s['title'].toString()),
-                                  ),
-                                );
-                                _reload();
-                              },
-                              child: const Text('Xin nghỉ'),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
+        itemBuilder: (context, s) => s.containsKey(sectionKey) ? SectionHeader(s[sectionKey].toString()) : _sessionCard(s),
       ),
     );
   }

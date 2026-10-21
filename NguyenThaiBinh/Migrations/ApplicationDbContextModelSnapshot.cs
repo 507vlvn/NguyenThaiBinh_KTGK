@@ -164,6 +164,9 @@ namespace NguyenThaiBinh.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<DateTime?>("CheckInUntil")
+                        .HasColumnType("datetime2");
+
                     b.Property<int>("ClassRoomId")
                         .HasColumnType("int");
 
@@ -178,6 +181,9 @@ namespace NguyenThaiBinh.Migrations
 
                     b.Property<double>("Longitude")
                         .HasColumnType("float");
+
+                    b.Property<DateTime?>("OpenedAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("QrToken")
                         .IsRequired()

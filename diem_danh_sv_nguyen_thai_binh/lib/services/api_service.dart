@@ -109,17 +109,42 @@ class ApiService {
   Future<List<Json>> sessions(int classId) async =>
       _list(await _send(() => _dio.get('/api/classes/$classId/sessions')));
 
-  // durationMinutes: thời gian mở điểm danh; null = mở đến khi giảng viên đóng.
-  Future<Json> createSession(int classId, {
-    required String title,
+  // Lên lịch một buổi học (chưa mở điểm danh). Giờ gửi lên dạng UTC.
+  Future<Json> createSession(int classId, {required String title, required DateTime startsAt, DateTime? endsAt}) async {
+    return _map(await _send(() => _dio.post('/api/classes/$classId/sessions', data: {
+          'title': title,
+          'startsAt': startsAt.toUtc().toIso8601String(),
+          'endsAt': endsAt?.toUtc().toIso8601String(),
+        })));
+  }
+
+  // Tạo lịch nhiều buổi lặp lại mỗi intervalDays ngày.
+  Future<Json> generateSessions(int classId, {
+    required DateTime firstStartsAt,
+    required int durationMinutes,
+    required int count,
+    int intervalDays = 7,
+  }) async {
+    return _map(await _send(() => _dio.post('/api/classes/$classId/sessions/generate', data: {
+          'firstStartsAt': firstStartsAt.toUtc().toIso8601String(),
+          'durationMinutes': durationMinutes,
+          'count': count,
+          'intervalDays': intervalDays,
+        })));
+  }
+
+  Future<void> deleteSession(int sessionId) async {
+    await _send(() => _dio.delete('/api/sessions/$sessionId'));
+  }
+
+  // Mở điểm danh tại lớp. durationMinutes null = mở đến khi giảng viên đóng.
+  Future<Json> openSession(int sessionId, {
     required double latitude,
     required double longitude,
     required double radiusMeters,
     int? durationMinutes,
   }) async {
-    return _map(await _send(() => _dio.post('/api/classes/$classId/sessions', data: {
-          'title': title,
-          'startsAt': DateTime.now().toUtc().toIso8601String(),
+    return _map(await _send(() => _dio.post('/api/sessions/$sessionId/open', data: {
           'latitude': latitude,
           'longitude': longitude,
           'radiusMeters': radiusMeters,

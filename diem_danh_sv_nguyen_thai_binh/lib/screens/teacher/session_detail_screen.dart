@@ -6,9 +6,10 @@ import '../../core/ui.dart';
 import '../../services/api_service.dart';
 import '../../widgets/class_info_card.dart';
 import '../../widgets/common.dart';
+import 'open_session_flow.dart';
 import 'session_qr_screen.dart';
 
-// Chi tiết một buổi học: trạng thái của cả lớp, điểm danh hộ, đóng/mở lại điểm danh.
+// Chi tiết một buổi học: giờ học, mở/đóng/mở lại điểm danh, trạng thái của cả lớp, điểm danh hộ.
 class SessionDetailScreen extends StatefulWidget {
   const SessionDetailScreen({super.key, required this.session});
 
@@ -20,10 +21,10 @@ class SessionDetailScreen extends StatefulWidget {
 
 class _SessionDetailScreenState extends State<SessionDetailScreen> {
   late Future<List<Json>> _future;
-  late bool _open = widget.session['isOpen'] == true;
-  late Object? _endsAt = widget.session['endsAt'];
+  late Json _session = Map<String, dynamic>.from(widget.session);
 
-  int get _id => widget.session['id'] as int;
+  int get _id => _session['id'] as int;
+  String get _state => _session['state'].toString();
 
   @override
   void initState() {
@@ -36,6 +37,14 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     try {
       await _future;
     } catch (_) {}
+  }
+
+  Future<void> _openSession() async {
+    final opened = await openSessionFlow(context, _session);
+    if (opened == null || !mounted) return;
+    setState(() => _session = opened);
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => SessionQrScreen(session: opened)));
+    _reload();
   }
 
   Future<void> _close() async {
@@ -51,7 +60,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     try {
       await api.closeSession(_id);
       if (!mounted) return;
-      setState(() => _open = false);
+      setState(() => _session = {..._session, 'state': 'Ended', 'isOpen': false});
       showMessage(context, 'Đã đóng điểm danh.');
     } catch (e) {
       if (mounted) showError(context, e);
@@ -71,11 +80,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               child: Text('Mở lại điểm danh trong bao lâu?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             ),
             for (final m in const [5, 10, 15, 30])
-              ListTile(
-                leading: const Icon(Icons.timer_outlined),
-                title: Text('$m phút'),
-                onTap: () => Navigator.pop(sheetContext, m),
-              ),
+              ListTile(leading: const Icon(Icons.timer_outlined), title: Text('$m phút'), onTap: () => Navigator.pop(sheetContext, m)),
           ],
         ),
       ),
@@ -84,11 +89,27 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     try {
       final res = await api.reopenSession(_id, minutes);
       if (!mounted) return;
-      setState(() {
-        _open = true;
-        _endsAt = res['endsAt'];
-      });
+      setState(() => _session = {..._session, 'state': 'Open', 'isOpen': true, 'checkInUntil': res['checkInUntil']});
       showMessage(context, res['message'].toString());
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _delete() async {
+    final api = context.read<ApiService>();
+    final navigator = Navigator.of(context);
+    final ok = await confirmAction(
+      context,
+      title: 'Xoá buổi học?',
+      message: 'Xoá "${_session['title']}" khỏi lịch học của lớp.',
+      confirmLabel: 'Xoá',
+      destructive: true,
+    );
+    if (!ok) return;
+    try {
+      await api.deleteSession(_id);
+      navigator.pop();
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -143,9 +164,43 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       case 'PendingLeave':
         return const StatusChip(label: 'Chờ duyệt đơn', icon: Icons.hourglass_top_rounded, tone: StatusTone.warning);
       default:
-        return _open
-            ? const StatusChip(label: 'Chưa điểm danh', icon: Icons.schedule_rounded)
-            : const StatusChip(label: 'Vắng', icon: Icons.cancel_rounded, tone: StatusTone.danger);
+        return _state == 'Ended'
+            ? const StatusChip(label: 'Vắng', icon: Icons.cancel_rounded, tone: StatusTone.danger)
+            : const StatusChip(label: 'Chưa điểm danh', icon: Icons.schedule_rounded);
+    }
+  }
+
+  Widget _actions() {
+    switch (_state) {
+      case 'Planned':
+        return SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(onPressed: _openSession, icon: const Icon(Icons.play_arrow_rounded), label: const Text('Mở điểm danh')),
+        );
+      case 'Open':
+        return Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () async {
+                  await Navigator.push(context, MaterialPageRoute(builder: (_) => SessionQrScreen(session: _session)));
+                  _reload();
+                },
+                icon: const Icon(Icons.qr_code_2_rounded),
+                label: const Text('Mã QR'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(onPressed: _close, icon: const Icon(Icons.lock_outline_rounded), label: const Text('Đóng')),
+            ),
+          ],
+        );
+      default:
+        return SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(onPressed: _reopen, icon: const Icon(Icons.lock_open_rounded), label: const Text('Mở lại điểm danh')),
+        );
     }
   }
 
@@ -153,10 +208,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final s = widget.session;
-    final remaining = _open ? remainingLabel(_endsAt) : null;
+    final remaining = _state == 'Open' ? remainingLabel(_session['checkInUntil']) : null;
+    final opened = _state != 'Planned';
     return Scaffold(
-      appBar: AppBar(title: Text(s['title'].toString())),
+      appBar: AppBar(
+        title: Text(_session['title'].toString()),
+        actions: [
+          if (_state == 'Planned') IconButton(tooltip: 'Xoá buổi học', icon: const Icon(Icons.delete_outline_rounded), onPressed: _delete),
+        ],
+      ),
       body: AsyncListView(
         future: _future,
         onRefresh: _reload,
@@ -175,61 +235,43 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                     children: [
                       Row(
                         children: [
-                          Expanded(child: Text(formatDateTime(s['startsAt'].toString()), style: text.titleMedium)),
-                          _open
-                              ? const StatusChip(label: 'Đang mở', icon: Icons.lock_open_rounded, tone: StatusTone.success)
-                              : const StatusChip(label: 'Đã kết thúc', icon: Icons.lock_outline_rounded),
+                          Expanded(child: Text('Giờ học', style: text.titleSmall)),
+                          switch (_state) {
+                            'Open' => const StatusChip(label: 'Đang điểm danh', icon: Icons.lock_open_rounded, tone: StatusTone.success),
+                            'Ended' => const StatusChip(label: 'Đã điểm danh', icon: Icons.lock_outline_rounded),
+                            _ => const StatusChip(label: 'Chưa mở điểm danh', icon: Icons.event_outlined, tone: StatusTone.info),
+                          },
                         ],
                       ),
+                      InfoLine(icon: Icons.schedule_rounded, text: formatSchedule(_session['startsAt'], _session['endsAt'])),
                       if (remaining != null) InfoLine(icon: Icons.timer_outlined, text: remaining),
-                      InfoLine(icon: Icons.near_me_outlined, text: 'Bán kính ${(s['radiusMeters'] as num).round()} m'),
+                      if (opened)
+                        InfoLine(icon: Icons.near_me_outlined, text: 'Phạm vi ${(_session['radiusMeters'] as num? ?? 0).round()} m'),
+                      if (opened) ...[
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            StatTile(value: '${count('Present')}', label: 'Có mặt', icon: Icons.check_circle_rounded, color: const Color(0xFF16A34A)),
+                            const SizedBox(width: 8),
+                            StatTile(value: '${count('Excused')}', label: 'Có phép', icon: Icons.assignment_turned_in_rounded, color: scheme.primary),
+                            const SizedBox(width: 8),
+                            StatTile(
+                              value: '${count('Absent') + count('PendingLeave')}',
+                              label: _state == 'Ended' ? 'Vắng' : 'Chưa điểm danh',
+                              icon: Icons.cancel_rounded,
+                              color: scheme.error,
+                            ),
+                          ],
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Đến giờ học, bấm "Mở điểm danh" khi đang ở trong lớp để hiện mã QR cho sinh viên quét.',
+                          style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
                       const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          StatTile(value: '${count('Present')}', label: 'Có mặt', icon: Icons.check_circle_rounded, color: const Color(0xFF16A34A)),
-                          const SizedBox(width: 8),
-                          StatTile(value: '${count('Excused')}', label: 'Có phép', icon: Icons.assignment_turned_in_rounded, color: scheme.primary),
-                          const SizedBox(width: 8),
-                          StatTile(
-                            value: '${count('Absent') + count('PendingLeave')}',
-                            label: _open ? 'Chưa điểm danh' : 'Vắng',
-                            icon: Icons.cancel_rounded,
-                            color: scheme.error,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          if (_open) ...[
-                            Expanded(
-                              child: FilledButton.icon(
-                                onPressed: () async {
-                                  await Navigator.push(context, MaterialPageRoute(builder: (_) => SessionQrScreen(session: s)));
-                                  _reload();
-                                },
-                                icon: const Icon(Icons.qr_code_2_rounded),
-                                label: const Text('Mã QR'),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _close,
-                                icon: const Icon(Icons.lock_outline_rounded),
-                                label: const Text('Đóng'),
-                              ),
-                            ),
-                          ] else
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _reopen,
-                                icon: const Icon(Icons.lock_open_rounded),
-                                label: const Text('Mở lại điểm danh'),
-                              ),
-                            ),
-                        ],
-                      ),
+                      _actions(),
                     ],
                   ),
                 ),
@@ -277,7 +319,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       icon: Icon(Icons.person_off_outlined, color: scheme.error),
                       onPressed: () => _removeAttendance(st),
                     )
-                  else
+                  else if (opened)
                     TextButton(onPressed: () => _markPresent(st), child: const Text('Điểm danh hộ')),
                 ],
               ),

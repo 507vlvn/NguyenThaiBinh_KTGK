@@ -66,7 +66,12 @@ public class ClassesApiController(
         var now = DateTime.UtcNow;
         var sessionCount = await sessions.Sessions().CountAsync(s => s.ClassRoomId == id);
         var openCount = await sessions.Sessions()
-            .CountAsync(s => s.ClassRoomId == id && s.IsOpen && (s.EndsAt == null || s.EndsAt > now));
+            .CountAsync(s => s.ClassRoomId == id && s.IsOpen && s.OpenedAt != null && (s.CheckInUntil == null || s.CheckInUntil > now));
+        var nextSession = await sessions.Sessions()
+            .Where(s => s.ClassRoomId == id && s.OpenedAt == null && s.StartsAt >= now)
+            .OrderBy(s => s.StartsAt)
+            .Select(s => new { s.Id, s.Title, s.StartsAt, s.EndsAt })
+            .FirstOrDefaultAsync();
         var myStats = enrolled
             ? (await BuildAbsenceReportAsync(id, c.PlannedSessions)).FirstOrDefault(r => r.StudentId == CurrentUserId)
             : null;
@@ -77,6 +82,7 @@ public class ClassesApiController(
             c.Room, c.Schedule, c.PlannedSessions, c.StudentCount,
             SessionCount = sessionCount,
             OpenSessionCount = openCount,
+            NextSession = nextSession,
             AllowedAbsences = AllowedAbsences(c.PlannedSessions),
             CanManage = canManage,
             MyStats = myStats
@@ -196,7 +202,7 @@ public class ClassesApiController(
         return NoContent();
     }
 
-    // Báo cáo vắng: chỉ tính buổi đã kết thúc. Vắng = không điểm danh và không có đơn nghỉ được duyệt.
+    // Báo cáo vắng: chỉ tính buổi đã mở điểm danh và đã kết thúc. Vắng = không điểm danh và không có đơn nghỉ được duyệt.
     [HttpGet("{id:int}/absence-report")]
     public async Task<IActionResult> AbsenceReport(int id)
     {
@@ -244,7 +250,9 @@ public class ClassesApiController(
         var allowed = AllowedAbsences(plannedSessions);
 
         var sessionIds = await sessions.Sessions()
-            .Where(s => s.ClassRoomId == classId && (!s.IsOpen || (s.EndsAt != null && s.EndsAt <= now)))
+            // Chỉ tính buổi đã mở điểm danh và đã kết thúc; buổi chưa mở không tính vắng.
+            .Where(s => s.ClassRoomId == classId && s.OpenedAt != null
+                        && (!s.IsOpen || (s.CheckInUntil != null && s.CheckInUntil <= now)))
             .Select(s => s.Id)
             .ToListAsync();
         var students = await classes.Enrollments().Where(e => e.ClassRoomId == classId)

@@ -16,8 +16,10 @@ public class SessionsApiController(
     ILeaveRequestRepository leaves,
     FileStorageService files) : ApiControllerBase
 {
-    // Giảng viên/admin nhận mã QR và số sinh viên đã điểm danh mỗi buổi.
-    // Sinh viên nhận trạng thái của chính mình: đã điểm danh chưa, đơn nghỉ ra sao.
+    private const string NoClassAccess = "Không tìm thấy lớp hoặc bạn không có quyền.";
+
+    // Lịch buổi học của lớp, sắp theo giờ học.
+    // Giảng viên/admin nhận mã QR và số sinh viên có mặt; sinh viên nhận trạng thái của chính mình.
     [HttpGet("api/classes/{classId:int}/sessions")]
     public async Task<IActionResult> GetByClass(int classId)
     {
@@ -27,7 +29,7 @@ public class SessionsApiController(
         var owner = c is not null;
         var now = DateTime.UtcNow;
         var list = await sessions.Sessions().Where(s => s.ClassRoomId == classId)
-            .OrderByDescending(s => s.StartsAt)
+            .OrderBy(s => s.StartsAt)
             .ToListAsync();
 
         var classAttendances = sessions.Attendances().Where(a => a.ClassSession.ClassRoomId == classId);
@@ -47,21 +49,21 @@ public class SessionsApiController(
 
         return Ok(list.Select(s => new
         {
-            s.Id, s.Title, s.StartsAt, s.EndsAt, s.Latitude, s.Longitude, s.RadiusMeters,
-            // IsOpen = còn nhận điểm danh (chưa đóng và chưa hết giờ).
+            s.Id, s.Title, s.StartsAt, s.EndsAt, s.OpenedAt, s.CheckInUntil, s.RadiusMeters,
+            State = s.State(now),
             IsOpen = s.AcceptsCheckIn(now),
-            QrToken = owner ? s.QrToken : null,
+            QrToken = owner && s.OpenedAt != null ? s.QrToken : null,
             PresentCount = owner ? presentCounts.GetValueOrDefault(s.Id) : (int?)null,
             CheckedIn = attended.Contains(s.Id),
             LeaveStatus = myLeaves.TryGetValue(s.Id, out var status) ? status.ToString() : null
         }));
     }
 
+    // Lên lịch một buổi học (chưa mở điểm danh).
     [HttpPost("api/classes/{classId:int}/sessions")]
     public async Task<IActionResult> Create(int classId, SessionRequest req)
     {
-        if (await classes.FindManagedAsync(classId, CurrentUserId, IsAdmin) is null)
-            return NotFound("Không tìm thấy lớp hoặc bạn không có quyền.");
+        if (await classes.FindManagedAsync(classId, CurrentUserId, IsAdmin) is null) return NotFound(NoClassAccess);
         var error = Validate(req);
         if (error is not null) return BadRequest(error);
 
@@ -70,18 +72,41 @@ public class SessionsApiController(
             ClassRoomId = classId,
             Title = req.Title.Trim(),
             StartsAt = req.StartsAt,
-            EndsAt = req.DurationMinutes is > 0 ? req.StartsAt.AddMinutes(req.DurationMinutes.Value) : null,
-            Latitude = req.Latitude,
-            Longitude = req.Longitude,
-            RadiusMeters = req.RadiusMeters,
-            QrToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)),
-            IsOpen = true
+            EndsAt = req.EndsAt,
+            QrToken = NewToken()
         };
         sessions.AddSession(s);
         await sessions.SaveAsync();
-        return Ok(new { s.Id, s.Title, s.StartsAt, s.EndsAt, s.RadiusMeters, s.QrToken, IsOpen = s.AcceptsCheckIn(DateTime.UtcNow) });
+        return Ok(ToDto(s));
     }
 
+    // Tạo lịch nhiều buổi lặp lại, đặt tên tiếp nối "Buổi N".
+    [HttpPost("api/classes/{classId:int}/sessions/generate")]
+    public async Task<IActionResult> Generate(int classId, GenerateSessionsRequest req)
+    {
+        if (await classes.FindManagedAsync(classId, CurrentUserId, IsAdmin) is null) return NotFound(NoClassAccess);
+        if (req.Count is < 1 or > 60) return BadRequest("Số buổi phải từ 1 đến 60.");
+        if (req.DurationMinutes is < 15 or > 600) return BadRequest("Thời lượng buổi học phải từ 15 đến 600 phút.");
+        if (req.IntervalDays is < 1 or > 30) return BadRequest("Khoảng cách giữa các buổi phải từ 1 đến 30 ngày.");
+
+        var existing = await sessions.Sessions().CountAsync(s => s.ClassRoomId == classId);
+        for (var i = 0; i < req.Count; i++)
+        {
+            var start = req.FirstStartsAt.AddDays(req.IntervalDays * i);
+            sessions.AddSession(new ClassSession
+            {
+                ClassRoomId = classId,
+                Title = $"Buổi {existing + i + 1}",
+                StartsAt = start,
+                EndsAt = start.AddMinutes(req.DurationMinutes),
+                QrToken = NewToken()
+            });
+        }
+        await sessions.SaveAsync();
+        return Ok(new { created = req.Count, message = $"Đã tạo lịch {req.Count} buổi học." });
+    }
+
+    // Sửa tên và giờ học của buổi.
     [HttpPut("api/sessions/{id:int}")]
     public async Task<IActionResult> Update(int id, SessionRequest req)
     {
@@ -92,12 +117,9 @@ public class SessionsApiController(
 
         s.Title = req.Title.Trim();
         s.StartsAt = req.StartsAt;
-        s.EndsAt = req.DurationMinutes is > 0 ? req.StartsAt.AddMinutes(req.DurationMinutes.Value) : null;
-        s.Latitude = req.Latitude;
-        s.Longitude = req.Longitude;
-        s.RadiusMeters = req.RadiusMeters;
+        s.EndsAt = req.EndsAt;
         await sessions.SaveAsync();
-        return Ok(new { s.Id, s.Title, s.StartsAt, s.EndsAt, s.RadiusMeters, IsOpen = s.AcceptsCheckIn(DateTime.UtcNow) });
+        return Ok(ToDto(s));
     }
 
     [HttpDelete("api/sessions/{id:int}")]
@@ -111,6 +133,27 @@ public class SessionsApiController(
         return NoContent();
     }
 
+    // Mở điểm danh tại lớp: lưu vị trí lớp, tạo mã QR mới, đặt hạn điểm danh.
+    [HttpPost("api/sessions/{id:int}/open")]
+    public async Task<IActionResult> Open(int id, OpenSessionRequest req)
+    {
+        var s = await FindManagedSessionAsync(id);
+        if (s is null) return NotFound();
+        if (req.RadiusMeters <= 0) return BadRequest("Bán kính phải lớn hơn 0.");
+        if (req.DurationMinutes is < 0 or > 600) return BadRequest("Thời gian điểm danh phải từ 0 đến 600 phút.");
+
+        var now = DateTime.UtcNow;
+        s.Latitude = req.Latitude;
+        s.Longitude = req.Longitude;
+        s.RadiusMeters = req.RadiusMeters;
+        s.OpenedAt ??= now;
+        s.CheckInUntil = req.DurationMinutes is > 0 ? now.AddMinutes(req.DurationMinutes.Value) : null;
+        s.QrToken = NewToken();
+        s.IsOpen = true;
+        await sessions.SaveAsync();
+        return Ok(ToDto(s, includeQr: true));
+    }
+
     [HttpPost("api/sessions/{id:int}/close")]
     public async Task<IActionResult> Close(int id)
     {
@@ -122,18 +165,19 @@ public class SessionsApiController(
         return Ok(new { message = "Đã đóng điểm danh." });
     }
 
-    // Mở lại điểm danh thêm một khoảng thời gian (ví dụ giảng viên lỡ đóng sớm).
+    // Mở lại điểm danh thêm một khoảng thời gian (ví dụ giảng viên lỡ đóng sớm). Giữ vị trí cũ.
     [HttpPost("api/sessions/{id:int}/reopen")]
     public async Task<IActionResult> Reopen(int id, ReopenRequest req)
     {
         var s = await FindManagedSessionAsync(id);
         if (s is null) return NotFound();
+        if (s.OpenedAt is null) return BadRequest("Buổi học chưa mở điểm danh lần nào.");
         if (req.Minutes is < 1 or > 240) return BadRequest("Thời gian mở lại phải từ 1 đến 240 phút.");
 
         s.IsOpen = true;
-        s.EndsAt = DateTime.UtcNow.AddMinutes(req.Minutes);
+        s.CheckInUntil = DateTime.UtcNow.AddMinutes(req.Minutes);
         await sessions.SaveAsync();
-        return Ok(new { message = $"Đã mở lại điểm danh thêm {req.Minutes} phút.", s.EndsAt });
+        return Ok(new { message = $"Đã mở lại điểm danh thêm {req.Minutes} phút.", s.CheckInUntil });
     }
 
     // Sinh viên quét QR (gửi kèm mã QR), kiểm tra đăng ký lớp, thời gian, khoảng cách GPS và ảnh chụp.
@@ -143,6 +187,7 @@ public class SessionsApiController(
     {
         var s = await sessions.Sessions().FirstOrDefaultAsync(x => x.Id == id);
         if (s is null) return NotFound();
+        if (s.OpenedAt is null) return BadRequest("Buổi học chưa mở điểm danh.");
         if (!s.AcceptsCheckIn(DateTime.UtcNow)) return BadRequest("Buổi học đã hết thời gian điểm danh.");
         if (!string.Equals(form.QrToken, s.QrToken, StringComparison.Ordinal))
             return BadRequest("Mã QR không đúng với buổi học này.");
@@ -224,6 +269,7 @@ public class SessionsApiController(
     {
         var s = await FindManagedSessionAsync(id);
         if (s is null) return NotFound();
+        if (s.OpenedAt is null) return BadRequest("Hãy mở điểm danh cho buổi học trước.");
         if (!await classes.IsEnrolledAsync(s.ClassRoomId, req.StudentId)) return BadRequest("Sinh viên không thuộc lớp này.");
 
         sessions.AddAttendance(new Attendance
@@ -280,11 +326,24 @@ public class SessionsApiController(
         return PhysicalFile(files.FullPath(a.PhotoPath), FileStorageService.MimeOf(a.PhotoPath));
     }
 
+    private static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+
+    private static object ToDto(ClassSession s, bool includeQr = false)
+    {
+        var now = DateTime.UtcNow;
+        return new
+        {
+            s.Id, s.Title, s.StartsAt, s.EndsAt, s.OpenedAt, s.CheckInUntil, s.RadiusMeters,
+            State = s.State(now),
+            IsOpen = s.AcceptsCheckIn(now),
+            QrToken = includeQr ? s.QrToken : null
+        };
+    }
+
     private static string? Validate(SessionRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Title)) return "Vui lòng nhập tên buổi học.";
-        if (req.RadiusMeters <= 0) return "Bán kính phải lớn hơn 0.";
-        if (req.DurationMinutes is < 0 or > 600) return "Thời gian điểm danh phải từ 0 đến 600 phút.";
+        if (req.EndsAt is not null && req.EndsAt <= req.StartsAt) return "Giờ kết thúc phải sau giờ bắt đầu.";
         return null;
     }
 

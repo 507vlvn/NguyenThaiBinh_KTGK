@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/location.dart';
 import '../../core/ui.dart';
 import '../../services/api_service.dart';
 import '../../widgets/class_form.dart';
 import '../../widgets/class_info_card.dart';
 import '../../widgets/common.dart';
+import '../../widgets/session_widgets.dart';
 import '../common/class_members_screen.dart';
 import 'absence_report_screen.dart';
 import 'leave_review_screen.dart';
+import 'open_session_flow.dart';
 import 'session_detail_screen.dart';
 import 'session_qr_screen.dart';
 
@@ -37,7 +38,7 @@ class _TeacherClassScreenState extends State<TeacherClassScreen> {
     final api = context.read<ApiService>();
     final results = await Future.wait([api.classDetail(widget.classId), api.sessions(widget.classId)]);
     if (mounted) setState(() => _detail = results[0] as Json);
-    return results[1] as List<Json>;
+    return groupSessions(results[1] as List<Json>);
   }
 
   Future<void> _reload() async {
@@ -76,33 +77,11 @@ class _TeacherClassScreenState extends State<TeacherClassScreen> {
     }
   }
 
-  // Tạo buổi học bằng bảng trượt; vị trí lớp lấy từ GPS hiện tại. Tạo xong mở mã QR ngay.
-  Future<void> _createSession() async {
-    final api = context.read<ApiService>();
-    final nextNumber = (_detail?['sessionCount'] as int? ?? 0) + 1;
-    final result = await showModalBottomSheet<_NewSession>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _NewSessionSheet(defaultTitle: 'Buổi $nextNumber'),
-    );
-    if (result == null || !mounted) return;
-    try {
-      final session = await runWithProgress(context, 'Đang lấy vị trí lớp và tạo buổi học...', () async {
-        final position = await currentPosition();
-        return api.createSession(
-          widget.classId,
-          title: result.title,
-          latitude: position.latitude,
-          longitude: position.longitude,
-          radiusMeters: result.radius,
-          durationMinutes: result.minutes == 0 ? null : result.minutes,
-        );
-      });
-      if (!mounted) return;
-      await _open(SessionQrScreen(session: session));
-    } catch (e) {
-      if (mounted) showError(context, e);
-    }
+  // Mở điểm danh cho buổi đã lên lịch rồi hiện mã QR ngay.
+  Future<void> _openSession(Json s) async {
+    final opened = await openSessionFlow(context, s);
+    if (opened == null || !mounted) return;
+    await _open(SessionQrScreen(session: opened));
   }
 
   Future<void> _closeSession(Json s) async {
@@ -110,7 +89,7 @@ class _TeacherClassScreenState extends State<TeacherClassScreen> {
     final ok = await confirmAction(
       context,
       title: 'Đóng điểm danh?',
-      message: 'Sinh viên sẽ không thể điểm danh buổi "${s['title']}" nữa. Bạn vẫn mở lại được sau.',
+      message: 'Sinh viên sẽ không thể điểm danh "${s['title']}" nữa. Bạn vẫn mở lại được sau.',
       confirmLabel: 'Đóng',
       destructive: true,
     );
@@ -124,108 +103,145 @@ class _TeacherClassScreenState extends State<TeacherClassScreen> {
     }
   }
 
+  // Thêm một buổi hoặc lịch lặp hằng tuần.
+  Future<void> _addSessions() async {
+    final api = context.read<ApiService>();
+    final planned = _detail?['plannedSessions'] as int? ?? 15;
+    final count = _detail?['sessionCount'] as int? ?? 0;
+    final result = await showModalBottomSheet<_AddSessionsResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _AddSessionsSheet(nextNumber: count + 1, remaining: (planned - count).clamp(1, 60)),
+    );
+    if (result == null || !mounted) return;
+    try {
+      if (result.weekly) {
+        final res = await api.generateSessions(
+          widget.classId,
+          firstStartsAt: result.start,
+          durationMinutes: result.end.difference(result.start).inMinutes,
+          count: result.count,
+        );
+        if (mounted) showMessage(context, res['message'].toString());
+      } else {
+        await api.createSession(widget.classId, title: result.title, startsAt: result.start, endsAt: result.end);
+        if (mounted) showMessage(context, 'Đã thêm ${result.title}.');
+      }
+      _reload();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Widget _sessionCard(Json s) {
+    final text = Theme.of(context).textTheme;
+    final state = s['state'];
+    final remaining = state == 'Open' ? remainingLabel(s['checkInUntil']) : null;
+    final relative = relativeDayLabel(s['startsAt']);
+    final studentCount = _detail?['studentCount'] as int? ?? 0;
+    return TapCard(
+      onTap: () => _open(SessionDetailScreen(session: s)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  relative == null ? s['title'].toString() : '${s['title']} • $relative',
+                  style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              switch (state) {
+                'Open' => const StatusChip(label: 'Đang điểm danh', icon: Icons.lock_open_rounded, tone: StatusTone.success),
+                'Ended' => const StatusChip(label: 'Đã điểm danh', icon: Icons.lock_outline_rounded),
+                _ => const StatusChip(label: 'Chưa mở', icon: Icons.event_outlined, tone: StatusTone.info),
+              },
+            ],
+          ),
+          InfoLine(icon: Icons.schedule_rounded, text: formatSchedule(s['startsAt'], s['endsAt'])),
+          if (remaining != null) InfoLine(icon: Icons.timer_outlined, text: remaining),
+          if (state != 'Planned') InfoLine(icon: Icons.how_to_reg_outlined, text: '${s['presentCount'] ?? 0}/$studentCount sinh viên có mặt'),
+          const SizedBox(height: 16),
+          if (state == 'Planned')
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () => _openSession(s),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('Mở điểm danh'),
+              ),
+            )
+          else if (state == 'Open')
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _open(SessionQrScreen(session: s)),
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                    label: const Text('Mã QR'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _closeSession(s),
+                    icon: const Icon(Icons.lock_outline_rounded),
+                    label: const Text('Đóng'),
+                  ),
+                ),
+              ],
+            )
+          else
+            Text('Chạm để xem danh sách điểm danh', style: text.bodySmall),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final studentCount = _detail?['studentCount'] as int? ?? 0;
+    final next = _detail?['nextSession'];
     return Scaffold(
       appBar: AppBar(title: Text(widget.className)),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createSession,
+        onPressed: _addSessions,
         icon: const Icon(Icons.add_rounded),
-        label: const Text('Buổi học mới'),
+        label: const Text('Thêm buổi học'),
       ),
       body: AsyncListView(
         future: _future,
         onRefresh: _reload,
         bottomPadding: 96,
         emptyIcon: Icons.event_note_outlined,
-        emptyTitle: 'Chưa có buổi học nào',
-        emptyMessage: 'Khi đang ở lớp, bấm "Buổi học mới" để mở điểm danh. Vị trí lớp được lấy từ GPS của bạn.',
-        headerBuilder: (items) {
-          final openCount = items.where((s) => s['isOpen'] == true).length;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_detail != null) ClassInfoCard(detail: _detail!, onEdit: _editClass),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _QuickAction(
-                    icon: Icons.groups_rounded,
-                    label: 'Sinh viên',
-                    onTap: () => _open(ClassMembersScreen(classId: widget.classId, className: widget.className)),
-                  ),
-                  const SizedBox(width: 12),
-                  _QuickAction(
-                    icon: Icons.inbox_rounded,
-                    label: 'Đơn nghỉ',
-                    onTap: () => _open(LeaveReviewScreen(classId: widget.classId)),
-                  ),
-                  const SizedBox(width: 12),
-                  _QuickAction(
-                    icon: Icons.insights_rounded,
-                    label: 'Báo cáo vắng',
-                    onTap: () => _open(AbsenceReportScreen(classId: widget.classId)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Text('Buổi học (${items.length}) • $openCount đang mở', style: text.titleMedium),
-            ],
-          );
-        },
-        itemBuilder: (context, s) {
-          final open = s['isOpen'] == true;
-          final remaining = open ? remainingLabel(s['endsAt']) : null;
-          final endsAt = s['endsAt'];
-          return TapCard(
-            onTap: () => _open(SessionDetailScreen(session: s)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        emptyTitle: 'Lớp chưa có lịch học',
+        emptyMessage: 'Bấm "Thêm buổi học" để lên lịch một buổi hoặc cả học kỳ.',
+        headerBuilder: (items) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_detail != null) ClassInfoCard(detail: _detail!, onEdit: _editClass),
+            if (next != null) ...[const SizedBox(height: 12), NextSessionCard(session: next as Json)],
+            const SizedBox(height: 12),
+            Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(child: Text(s['title'].toString(), style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
-                    open
-                        ? const StatusChip(label: 'Đang mở', icon: Icons.lock_open_rounded, tone: StatusTone.success)
-                        : const StatusChip(label: 'Đã kết thúc', icon: Icons.lock_outline_rounded),
-                  ],
+                _QuickAction(
+                  icon: Icons.groups_rounded,
+                  label: 'Sinh viên',
+                  onTap: () => _open(ClassMembersScreen(classId: widget.classId, className: widget.className)),
                 ),
-                InfoLine(
-                  icon: Icons.event_outlined,
-                  text: endsAt == null
-                      ? formatDateTime(s['startsAt'].toString())
-                      : '${formatDateTime(s['startsAt'].toString())} - ${formatTime(endsAt.toString())}',
+                const SizedBox(width: 12),
+                _QuickAction(icon: Icons.inbox_rounded, label: 'Đơn nghỉ', onTap: () => _open(LeaveReviewScreen(classId: widget.classId))),
+                const SizedBox(width: 12),
+                _QuickAction(
+                  icon: Icons.insights_rounded,
+                  label: 'Báo cáo vắng',
+                  onTap: () => _open(AbsenceReportScreen(classId: widget.classId)),
                 ),
-                if (remaining != null) InfoLine(icon: Icons.timer_outlined, text: remaining),
-                InfoLine(icon: Icons.how_to_reg_outlined, text: '${s['presentCount'] ?? 0}/$studentCount sinh viên có mặt • Chạm để xem chi tiết'),
-                if (open) ...[
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: () => _open(SessionQrScreen(session: s)),
-                          icon: const Icon(Icons.qr_code_2_rounded),
-                          label: const Text('Mã QR'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _closeSession(s),
-                          icon: const Icon(Icons.lock_outline_rounded),
-                          label: const Text('Đóng'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
-          );
-        },
+          ],
+        ),
+        itemBuilder: (context, s) => s.containsKey(sectionKey) ? SectionHeader(s[sectionKey].toString()) : _sessionCard(s),
       ),
     );
   }
@@ -257,42 +273,83 @@ class _QuickAction extends StatelessWidget {
   }
 }
 
-class _NewSession {
-  const _NewSession(this.title, this.radius, this.minutes);
+class _AddSessionsResult {
+  const _AddSessionsResult({required this.weekly, required this.title, required this.start, required this.end, required this.count});
 
+  final bool weekly;
   final String title;
-  final double radius;
-  // 0 = mở đến khi giảng viên đóng.
-  final int minutes;
+  final DateTime start;
+  final DateTime end;
+  final int count;
 }
 
-class _NewSessionSheet extends StatefulWidget {
-  const _NewSessionSheet({required this.defaultTitle});
+class _AddSessionsSheet extends StatefulWidget {
+  const _AddSessionsSheet({required this.nextNumber, required this.remaining});
 
-  final String defaultTitle;
+  final int nextNumber;
+  final int remaining;
 
   @override
-  State<_NewSessionSheet> createState() => _NewSessionSheetState();
+  State<_AddSessionsSheet> createState() => _AddSessionsSheetState();
 }
 
-class _NewSessionSheetState extends State<_NewSessionSheet> {
-  late final _title = TextEditingController(text: widget.defaultTitle);
-  double _radius = 100;
-  int _minutes = 15;
+class _AddSessionsSheetState extends State<_AddSessionsSheet> {
+  late final _title = TextEditingController(text: 'Buổi ${widget.nextNumber}');
+  late final _count = TextEditingController(text: '${widget.remaining}');
+  bool _weekly = false;
+  DateTime _date = DateTime.now();
+  TimeOfDay _start = const TimeOfDay(hour: 7, minute: 0);
+  TimeOfDay _end = const TimeOfDay(hour: 9, minute: 30);
   String? _error;
 
   @override
   void dispose() {
     _title.dispose();
+    _count.dispose();
     super.dispose();
   }
 
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime.now().subtract(const Duration(days: 30)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  Future<void> _pickTime(bool start) async {
+    final picked = await showTimePicker(context: context, initialTime: start ? _start : _end);
+    if (picked == null) return;
+    setState(() {
+      if (start) {
+        _start = picked;
+      } else {
+        _end = picked;
+      }
+    });
+  }
+
   void _submit() {
-    if (_title.text.trim().isEmpty) {
-      setState(() => _error = 'Vui lòng nhập tên buổi học');
+    final start = DateTime(_date.year, _date.month, _date.day, _start.hour, _start.minute);
+    final end = DateTime(_date.year, _date.month, _date.day, _end.hour, _end.minute);
+    final count = int.tryParse(_count.text.trim()) ?? 0;
+    String? error;
+    if (!end.isAfter(start)) {
+      error = 'Giờ kết thúc phải sau giờ bắt đầu.';
+    } else if (_weekly && (count < 1 || count > 60)) {
+      error = 'Số buổi phải từ 1 đến 60.';
+    } else if (!_weekly && _title.text.trim().isEmpty) {
+      error = 'Vui lòng nhập tên buổi học.';
+    }
+    if (error != null) {
+      setState(() => _error = error);
       return;
     }
-    Navigator.pop(context, _NewSession(_title.text.trim(), _radius, _minutes));
+    Navigator.pop(context, _AddSessionsResult(weekly: _weekly, title: _title.text.trim(), start: start, end: end, count: count));
   }
 
   @override
@@ -306,55 +363,65 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Buổi học mới', style: text.titleLarge),
+            Text('Thêm buổi học', style: text.titleLarge),
             const SizedBox(height: 16),
-            TextField(
-              controller: _title,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(labelText: 'Tên buổi học', hintText: 'Ví dụ: Buổi 3 - Chương 2', errorText: _error),
-              onChanged: (_) {
-                if (_error != null) setState(() => _error = null);
-              },
-              onSubmitted: (_) => _submit(),
-            ),
-            const SizedBox(height: 20),
-            Text('Thời gian mở điểm danh', style: text.titleSmall),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final (value, label) in const [(15, '15 phút'), (30, '30 phút'), (45, '45 phút'), (90, '90 phút'), (0, 'Đến khi đóng')])
-                  ChoiceChip(label: Text(label), selected: _minutes == value, onSelected: (_) => setState(() => _minutes = value)),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Text('Phạm vi điểm danh', style: text.titleSmall),
-            const SizedBox(height: 8),
-            SegmentedButton<double>(
+            SegmentedButton<bool>(
               segments: const [
-                ButtonSegment(value: 50, label: Text('50 m')),
-                ButtonSegment(value: 100, label: Text('100 m')),
-                ButtonSegment(value: 200, label: Text('200 m')),
+                ButtonSegment(value: false, label: Text('Một buổi'), icon: Icon(Icons.event_outlined)),
+                ButtonSegment(value: true, label: Text('Hằng tuần'), icon: Icon(Icons.event_repeat_outlined)),
               ],
-              selected: {_radius},
-              onSelectionChanged: (s) => setState(() => _radius = s.first),
+              selected: {_weekly},
+              onSelectionChanged: (v) => setState(() => _weekly = v.first),
             ),
+            const SizedBox(height: 16),
+            if (!_weekly)
+              TextField(controller: _title, decoration: const InputDecoration(labelText: 'Tên buổi học')),
+            if (_weekly)
+              TextField(
+                controller: _count,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Số buổi',
+                  helperText: 'Mỗi tuần một buổi, cùng thứ và giờ với buổi đầu tiên',
+                ),
+              ),
             const SizedBox(height: 12),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.calendar_month_outlined),
+              title: Text(_weekly ? 'Buổi đầu tiên' : 'Ngày học'),
+              subtitle: Text('${_two(_date.day)}/${_two(_date.month)}/${_date.year}'),
+              trailing: const Icon(Icons.edit_calendar_outlined),
+              onTap: _pickDate,
+            ),
             Row(
               children: [
-                Icon(Icons.my_location_rounded, size: 18, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    'Vị trí lớp được lấy từ GPS hiện tại của bạn. Hãy tạo buổi học khi đang ở trong lớp.',
-                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.schedule_rounded),
+                    title: const Text('Bắt đầu'),
+                    subtitle: Text('${_two(_start.hour)}:${_two(_start.minute)}'),
+                    onTap: () => _pickTime(true),
+                  ),
+                ),
+                Expanded(
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.schedule_outlined),
+                    title: const Text('Kết thúc'),
+                    subtitle: Text('${_two(_end.hour)}:${_two(_end.minute)}'),
+                    onTap: () => _pickTime(false),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 24),
-            FilledButton.icon(onPressed: _submit, icon: const Icon(Icons.qr_code_2_rounded), label: const Text('Tạo và hiện mã QR')),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: text.bodyMedium?.copyWith(color: scheme.error)),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(onPressed: _submit, child: Text(_weekly ? 'Tạo lịch hằng tuần' : 'Thêm buổi học')),
           ],
         ),
       ),
