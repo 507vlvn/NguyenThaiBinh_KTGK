@@ -2,79 +2,93 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ui.dart';
-import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
-import 'admin_class_students_screen.dart';
+import '../../widgets/common.dart';
+import '../common/profile_view.dart';
+import '../../widgets/class_form.dart';
+import '../common/class_members_screen.dart';
 
-class AdminHomeScreen extends StatelessWidget {
+// Trang quản trị: người dùng, môn học, lớp học và tài khoản.
+class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final auth = context.read<AuthProvider>();
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Quản trị'),
-          actions: [IconButton(tooltip: 'Đăng xuất', icon: const Icon(Icons.logout), onPressed: auth.logout)],
-          bottom: const TabBar(tabs: [
-            Tab(text: 'Người dùng'),
-            Tab(text: 'Môn học'),
-            Tab(text: 'Lớp học'),
-          ]),
-        ),
-        body: const TabBarView(children: [_UsersTab(), _SubjectsTab(), _ClassesTab()]),
-      ),
-    );
-  }
+  State<AdminHomeScreen> createState() => _AdminHomeScreenState();
 }
 
-// Danh sách có nút xoá, dùng chung cho các tab.
-class _ListTab extends StatelessWidget {
-  const _ListTab({required this.future, required this.itemBuilder, required this.onAdd, required this.onRefresh});
+class _AdminHomeScreenState extends State<AdminHomeScreen> {
+  int _tab = 0;
+  // Tăng phiên bản khi chọn tab để tab đó tạo lại và tải dữ liệu mới.
+  final _versions = [0, 0, 0, 0];
 
-  final Future<List<Json>> future;
-  final Widget Function(BuildContext context, Json item) itemBuilder;
-  final VoidCallback onAdd;
-  final VoidCallback onRefresh;
+  static const _titles = ['Người dùng', 'Môn học', 'Lớp học', 'Tài khoản'];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      floatingActionButton: FloatingActionButton(onPressed: onAdd, child: const Icon(Icons.add)),
-      body: FutureBuilder<List<Json>>(
-        future: future,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
-          if (snap.hasError) return Center(child: Text(snap.error.toString()));
-          final list = snap.data!;
-          if (list.isEmpty) return const Center(child: Text('Chưa có dữ liệu.'));
-          return ListView.builder(
-            itemCount: list.length,
-            itemBuilder: (context, i) => itemBuilder(context, list[i]),
-          );
-        },
+      appBar: AppBar(title: Text(_titles[_tab])),
+      body: IndexedStack(
+        index: _tab,
+        children: [
+          KeyedSubtree(key: ValueKey('users-${_versions[0]}'), child: const _UsersTab()),
+          KeyedSubtree(key: ValueKey('subjects-${_versions[1]}'), child: const _SubjectsTab()),
+          KeyedSubtree(key: ValueKey('classes-${_versions[2]}'), child: const _ClassesTab()),
+          const ProfileView(),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() {
+          _tab = i;
+          _versions[i]++;
+        }),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.people_outline_rounded), selectedIcon: Icon(Icons.people_rounded), label: 'Người dùng'),
+          NavigationDestination(icon: Icon(Icons.book_outlined), selectedIcon: Icon(Icons.book_rounded), label: 'Môn học'),
+          NavigationDestination(icon: Icon(Icons.class_outlined), selectedIcon: Icon(Icons.class_rounded), label: 'Lớp học'),
+          NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Tài khoản'),
+        ],
       ),
     );
   }
 }
 
-Future<void> _confirmDelete(BuildContext context, String what, Future<void> Function() action, VoidCallback onDone) async {
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('Xoá?'),
-      content: Text('Xoá $what? Không thể hoàn tác.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Huỷ')),
-        FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Xoá')),
+// Menu "Sửa / Xoá" trên mỗi thẻ.
+class _ItemMenu extends StatelessWidget {
+  const _ItemMenu({required this.onEdit, required this.onDelete});
+
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final error = Theme.of(context).colorScheme.error;
+    return PopupMenuButton<String>(
+      tooltip: 'Tuỳ chọn',
+      onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Sửa'))),
+        PopupMenuItem(
+          value: 'delete',
+          child: ListTile(leading: Icon(Icons.delete_outline_rounded, color: error), title: Text('Xoá', style: TextStyle(color: error))),
+        ),
       ],
-    ),
+    );
+  }
+}
+
+Future<void> _delete(BuildContext context, String what, Future<void> Function() action, VoidCallback onDone) async {
+  final ok = await confirmAction(
+    context,
+    title: 'Xoá $what?',
+    message: 'Thao tác này không thể hoàn tác.',
+    confirmLabel: 'Xoá',
+    destructive: true,
   );
-  if (ok != true) return;
+  if (!ok) return;
   try {
     await action();
+    if (context.mounted) showMessage(context, 'Đã xoá $what.');
     onDone();
   } catch (e) {
     if (context.mounted) showError(context, e);
@@ -91,92 +105,265 @@ class _UsersTab extends StatefulWidget {
 }
 
 class _UsersTabState extends State<_UsersTab> {
-  late Future<List<Json>> _future;
+  List<Json>? _users;
+  String? _error;
+  String _query = '';
+  String _role = 'All';
 
   @override
   void initState() {
     super.initState();
-    _future = context.read<ApiService>().users();
+    _load();
   }
 
-  void _reload() => setState(() => _future = context.read<ApiService>().users());
-
-  Future<void> _add() async {
-    final api = context.read<ApiService>();
-    final username = TextEditingController();
-    final email = TextEditingController();
-    final fullName = TextEditingController();
-    final password = TextEditingController();
-    String role = 'SinhVien';
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialog) => AlertDialog(
-          title: const Text('Thêm người dùng'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: fullName, decoration: const InputDecoration(labelText: 'Họ và tên')),
-                TextField(controller: username, decoration: const InputDecoration(labelText: 'Tên đăng nhập')),
-                TextField(controller: email, decoration: const InputDecoration(labelText: 'Email')),
-                TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'Mật khẩu')),
-                DropdownButtonFormField<String>(
-                  initialValue: role,
-                  items: const [
-                    DropdownMenuItem(value: 'SinhVien', child: Text('Sinh viên')),
-                    DropdownMenuItem(value: 'GiangVien', child: Text('Giảng viên')),
-                    DropdownMenuItem(value: 'Admin', child: Text('Quản trị')),
-                  ],
-                  onChanged: (v) => setDialog(() => role = v ?? role),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Huỷ')),
-            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Thêm')),
-          ],
-        ),
-      ),
-    );
-    if (ok == true && mounted) {
-      try {
-        await api.createUser(
-          username: username.text.trim(),
-          email: email.text.trim(),
-          password: password.text,
-          fullName: fullName.text.trim(),
-          role: role,
-        );
-        _reload();
-      } catch (e) {
-        if (mounted) showError(context, e);
+  Future<void> _load() async {
+    try {
+      final users = await context.read<ApiService>().users();
+      if (mounted) {
+        setState(() {
+          _users = users;
+          _error = null;
+        });
       }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
     }
-    for (final c in [username, email, fullName, password]) {
-      c.dispose();
+  }
+
+  List<Json> get _filtered {
+    final q = _query.trim().toLowerCase();
+    return (_users ?? []).where((u) {
+      if (_role != 'All' && u['role'] != _role) return false;
+      if (q.isEmpty) return true;
+      return '${u['fullName']} ${u['username']} ${u['email']}'.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  Future<void> _openForm([Json? user]) async {
+    final api = context.read<ApiService>();
+    final values = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _UserForm(user: user),
+    );
+    if (values == null || !mounted) return;
+    try {
+      if (user == null) {
+        await api.createUser(
+          username: values['username'],
+          email: values['email'],
+          password: values['password'],
+          fullName: values['fullName'],
+          role: values['role'],
+        );
+      } else {
+        await api.updateUser(
+          user['id'] as int,
+          email: values['email'],
+          fullName: values['fullName'],
+          role: values['role'],
+          isActive: values['isActive'],
+        );
+      }
+      if (mounted) showMessage(context, user == null ? 'Đã thêm người dùng.' : 'Đã lưu thay đổi.');
+      _load();
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return _ListTab(
-      future: _future,
-      onAdd: _add,
-      onRefresh: _reload,
-      itemBuilder: (context, u) => ListTile(
-        leading: const CircleAvatar(child: Icon(Icons.person)),
-        title: Text('${u['fullName']} (${u['username']})'),
-        subtitle: Text('${u['email']} • ${roleLabel(u['role'].toString())}'),
-        trailing: IconButton(
-          tooltip: 'Xoá',
-          icon: const Icon(Icons.delete_outline),
-          onPressed: () => _confirmDelete(
-            context,
-            'người dùng ${u['username']}',
-            () => context.read<ApiService>().deleteUser(u['id'] as int),
-            _reload,
+    final text = Theme.of(context).textTheme;
+    Widget body;
+    if (_error != null) {
+      body = ErrorState(message: _error!, onRetry: _load);
+    } else if (_users == null) {
+      body = const SkeletonList();
+    } else {
+      final list = _filtered;
+      body = RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          children: [
+            TextField(
+              decoration: const InputDecoration(hintText: 'Tìm theo tên, tài khoản, email', prefixIcon: Icon(Icons.search_rounded)),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final (value, label) in const [('All', 'Tất cả'), ('SinhVien', 'Sinh viên'), ('GiangVien', 'Giảng viên'), ('Admin', 'Quản trị')])
+                  ChoiceChip(label: Text(label), selected: _role == value, onSelected: (_) => setState(() => _role = value)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text('${list.length} người dùng', style: text.titleMedium),
+            const SizedBox(height: 12),
+            if (list.isEmpty)
+              const EmptyState(icon: Icons.person_search_outlined, title: 'Không tìm thấy người dùng phù hợp')
+            else
+              for (final u in list)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: TapCard(
+                    onTap: () => _openForm(u),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+                    child: Row(
+                      children: [
+                        InitialsAvatar(name: u['fullName'].toString()),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(u['fullName'].toString(), style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                              Text('${u['username']} • ${u['email']}', style: text.bodySmall),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: [
+                                  StatusChip(label: roleLabel(u['role'].toString()), icon: Icons.badge_outlined, tone: StatusTone.info),
+                                  if (u['isActive'] != true)
+                                    const StatusChip(label: 'Chưa kích hoạt', icon: Icons.block_rounded, tone: StatusTone.warning),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        _ItemMenu(
+                          onEdit: () => _openForm(u),
+                          onDelete: () => _delete(
+                            context,
+                            'người dùng ${u['username']}',
+                            () => context.read<ApiService>().deleteUser(u['id'] as int),
+                            _load,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+          ],
+        ),
+      );
+    }
+    return Scaffold(
+      body: body,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openForm(),
+        icon: const Icon(Icons.person_add_alt_rounded),
+        label: const Text('Thêm'),
+      ),
+    );
+  }
+}
+
+class _UserForm extends StatefulWidget {
+  const _UserForm({this.user});
+
+  final Json? user;
+
+  @override
+  State<_UserForm> createState() => _UserFormState();
+}
+
+class _UserFormState extends State<_UserForm> {
+  final _form = GlobalKey<FormState>();
+  late final _fullName = TextEditingController(text: widget.user?['fullName']?.toString() ?? '');
+  late final _email = TextEditingController(text: widget.user?['email']?.toString() ?? '');
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  late String _role = widget.user?['role']?.toString() ?? 'SinhVien';
+  late bool _isActive = widget.user?['isActive'] != false;
+
+  bool get _isEdit => widget.user != null;
+
+  @override
+  void dispose() {
+    for (final c in [_fullName, _email, _username, _password]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_form.currentState!.validate()) return;
+    Navigator.pop(context, {
+      'fullName': _fullName.text.trim(),
+      'email': _email.text.trim(),
+      'username': _username.text.trim(),
+      'password': _password.text,
+      'role': _role,
+      'isActive': _isActive,
+    });
+  }
+
+  String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Không được để trống' : null;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(24, 0, 24, 24 + MediaQuery.viewInsetsOf(context).bottom),
+      child: Form(
+        key: _form,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(_isEdit ? 'Sửa người dùng' : 'Thêm người dùng', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _fullName,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Họ và tên'),
+                validator: _required,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(labelText: 'Email'),
+                validator: (v) => (v == null || !v.contains('@')) ? 'Email chưa đúng định dạng' : null,
+              ),
+              if (!_isEdit) ...[
+                const SizedBox(height: 12),
+                TextFormField(controller: _username, decoration: const InputDecoration(labelText: 'Tên đăng nhập'), validator: _required),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _password,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Mật khẩu', helperText: 'Tối thiểu 6 ký tự'),
+                  validator: (v) => (v == null || v.length < 6) ? 'Mật khẩu cần tối thiểu 6 ký tự' : null,
+                ),
+              ],
+              const SizedBox(height: 16),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'SinhVien', label: Text('Sinh viên')),
+                  ButtonSegment(value: 'GiangVien', label: Text('Giảng viên')),
+                  ButtonSegment(value: 'Admin', label: Text('Quản trị')),
+                ],
+                selected: {_role},
+                onSelectionChanged: (s) => setState(() => _role = s.first),
+              ),
+              if (_isEdit)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Tài khoản đang hoạt động'),
+                  value: _isActive,
+                  onChanged: (v) => setState(() => _isActive = v),
+                ),
+              const SizedBox(height: 16),
+              FilledButton(onPressed: _submit, child: Text(_isEdit ? 'Lưu thay đổi' : 'Thêm người dùng')),
+            ],
           ),
         ),
       ),
@@ -202,57 +389,90 @@ class _SubjectsTabState extends State<_SubjectsTab> {
     _future = context.read<ApiService>().subjects();
   }
 
-  void _reload() => setState(() => _future = context.read<ApiService>().subjects());
+  Future<void> _reload() async {
+    setState(() => _future = context.read<ApiService>().subjects());
+    try {
+      await _future;
+    } catch (_) {}
+  }
 
-  Future<void> _add() async {
-    final code = TextEditingController();
-    final name = TextEditingController();
+  Future<void> _openForm([Json? subject]) async {
+    final api = context.read<ApiService>();
+    final code = TextEditingController(text: subject?['code']?.toString() ?? '');
+    final name = TextEditingController(text: subject?['name']?.toString() ?? '');
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Thêm môn học'),
+        title: Text(subject == null ? 'Thêm môn học' : 'Sửa môn học'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: code, decoration: const InputDecoration(labelText: 'Mã môn')),
+            TextField(controller: code, textCapitalization: TextCapitalization.characters, decoration: const InputDecoration(labelText: 'Mã môn')),
+            const SizedBox(height: 12),
             TextField(controller: name, decoration: const InputDecoration(labelText: 'Tên môn')),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Huỷ')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Thêm')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Lưu')),
         ],
       ),
     );
-    if (ok == true && mounted) {
-      try {
-        await context.read<ApiService>().createSubject(code.text.trim(), name.text.trim());
-        _reload();
-      } catch (e) {
-        if (mounted) showError(context, e);
-      }
-    }
+    final codeText = code.text.trim();
+    final nameText = name.text.trim();
     code.dispose();
     name.dispose();
+    if (ok != true || !mounted) return;
+    if (codeText.isEmpty || nameText.isEmpty) {
+      showMessage(context, 'Vui lòng nhập đủ mã môn và tên môn.');
+      return;
+    }
+    try {
+      if (subject == null) {
+        await api.createSubject(codeText, nameText);
+      } else {
+        await api.updateSubject(subject['id'] as int, codeText, nameText);
+      }
+      _reload();
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return _ListTab(
-      future: _future,
-      onAdd: _add,
-      onRefresh: _reload,
-      itemBuilder: (context, s) => ListTile(
-        title: Text(s['name'].toString()),
-        subtitle: Text(s['code'].toString()),
-        trailing: IconButton(
-          tooltip: 'Xoá',
-          icon: const Icon(Icons.delete_outline),
-          onPressed: () => _confirmDelete(
-            context,
-            'môn ${s['name']}',
-            () => context.read<ApiService>().deleteSubject(s['id'] as int),
-            _reload,
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openForm(),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Thêm'),
+      ),
+      body: AsyncListView(
+        future: _future,
+        onRefresh: _reload,
+        bottomPadding: 96,
+        emptyIcon: Icons.book_outlined,
+        emptyTitle: 'Chưa có môn học',
+        emptyMessage: 'Bấm "Thêm" để tạo môn học đầu tiên.',
+        itemBuilder: (context, s) => TapCard(
+          onTap: () => _openForm(s),
+          padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(8)),
+                child: Text(s['code'].toString(), style: text.labelLarge?.copyWith(color: scheme.onSecondaryContainer)),
+              ),
+              const SizedBox(width: 16),
+              Expanded(child: Text(s['name'].toString(), style: text.titleMedium)),
+              _ItemMenu(
+                onEdit: () => _openForm(s),
+                onDelete: () => _delete(context, 'môn ${s['name']}', () => context.read<ApiService>().deleteSubject(s['id'] as int), _reload),
+              ),
+            ],
           ),
         ),
       ),
@@ -278,87 +498,96 @@ class _ClassesTabState extends State<_ClassesTab> {
     _future = context.read<ApiService>().classes();
   }
 
-  void _reload() => setState(() => _future = context.read<ApiService>().classes());
+  Future<void> _reload() async {
+    setState(() => _future = context.read<ApiService>().classes());
+    try {
+      await _future;
+    } catch (_) {}
+  }
 
-  Future<void> _add() async {
+  Future<void> _openForm([Json? cls]) async {
     final api = context.read<ApiService>();
-    final name = TextEditingController();
-    final subjects = await api.subjects();
-    final users = await api.users();
-    final teachers = users.where((u) => u['role'] == 'GiangVien').toList();
+    final List<Json> subjects;
+    final List<Json> teachers;
+    try {
+      subjects = await api.subjects();
+      teachers = (await api.users()).where((u) => u['role'] == 'GiangVien').toList();
+    } catch (e) {
+      if (mounted) showError(context, e);
+      return;
+    }
     if (!mounted) return;
     if (subjects.isEmpty || teachers.isEmpty) {
-      showMessage(context, 'Cần có ít nhất 1 môn học và 1 giảng viên.');
-      name.dispose();
+      showMessage(context, 'Cần có ít nhất 1 môn học và 1 giảng viên trước khi tạo lớp.');
       return;
     }
 
-    int subjectId = subjects.first['id'] as int;
-    int teacherId = teachers.first['id'] as int;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialog) => AlertDialog(
-          title: const Text('Thêm lớp học'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: name, decoration: const InputDecoration(labelText: 'Tên lớp')),
-                DropdownButtonFormField<int>(
-                  initialValue: subjectId,
-                  decoration: const InputDecoration(labelText: 'Môn học'),
-                  items: [for (final s in subjects) DropdownMenuItem(value: s['id'] as int, child: Text(s['name'].toString()))],
-                  onChanged: (v) => setDialog(() => subjectId = v ?? subjectId),
-                ),
-                DropdownButtonFormField<int>(
-                  initialValue: teacherId,
-                  decoration: const InputDecoration(labelText: 'Giảng viên'),
-                  items: [for (final t in teachers) DropdownMenuItem(value: t['id'] as int, child: Text(t['fullName'].toString()))],
-                  onChanged: (v) => setDialog(() => teacherId = v ?? teacherId),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Huỷ')),
-            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Thêm')),
-          ],
-        ),
-      ),
-    );
-    if (ok == true && mounted) {
-      try {
-        await api.createClass(name.text.trim(), subjectId, teacherId);
-        _reload();
-      } catch (e) {
-        if (mounted) showError(context, e);
+    final data = await showClassForm(context, cls: cls, subjects: subjects, teachers: teachers);
+    if (data == null || !mounted) return;
+    try {
+      if (cls == null) {
+        await api.createClass(data);
+      } else {
+        await api.updateClass(cls['id'] as int, data);
       }
+      if (mounted) showMessage(context, cls == null ? 'Đã tạo lớp ${data['name']}.' : 'Đã lưu thay đổi.');
+      _reload();
+    } catch (e) {
+      if (mounted) showError(context, e);
     }
-    name.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return _ListTab(
-      future: _future,
-      onAdd: _add,
-      onRefresh: _reload,
-      itemBuilder: (context, c) => ListTile(
-        title: Text(c['name'].toString()),
-        subtitle: Text('${c['subject']} • GV: ${c['teacher']}'),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => AdminClassStudentsScreen(classId: c['id'] as int, className: c['name'].toString())),
-        ),
-        trailing: IconButton(
-          tooltip: 'Xoá lớp',
-          icon: const Icon(Icons.delete_outline),
-          onPressed: () => _confirmDelete(
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openForm(),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Thêm'),
+      ),
+      body: AsyncListView(
+        future: _future,
+        onRefresh: _reload,
+        bottomPadding: 96,
+        emptyIcon: Icons.class_outlined,
+        emptyTitle: 'Chưa có lớp học',
+        emptyMessage: 'Tạo môn học và tài khoản giảng viên trước, rồi bấm "Thêm".',
+        itemBuilder: (context, c) => TapCard(
+          onTap: () => Navigator.push(
             context,
-            'lớp ${c['name']}',
-            () => context.read<ApiService>().deleteClass(c['id'] as int),
-            _reload,
+            MaterialPageRoute(builder: (_) => ClassMembersScreen(classId: c['id'] as int, className: c['name'].toString())),
+          ).then((_) => _reload()),
+          padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(14)),
+                child: Icon(Icons.menu_book_rounded, color: scheme.onSecondaryContainer),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(c['name'].toString(), style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                    InfoLine(icon: Icons.book_outlined, text: c['subject'].toString()),
+                    InfoLine(icon: Icons.person_outline_rounded, text: 'GV: ${c['teacher']}'),
+                    InfoLine(
+                      icon: Icons.groups_outlined,
+                      text: '${c['studentCount']} sinh viên • Chạm để quản lý sinh viên',
+                    ),
+                  ],
+                ),
+              ),
+              _ItemMenu(
+                onEdit: () => _openForm(c),
+                onDelete: () => _delete(context, 'lớp ${c['name']}', () => context.read<ApiService>().deleteClass(c['id'] as int), _reload),
+              ),
+            ],
           ),
         ),
       ),

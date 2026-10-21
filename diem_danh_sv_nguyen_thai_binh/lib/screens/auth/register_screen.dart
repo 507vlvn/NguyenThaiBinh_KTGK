@@ -18,20 +18,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _email = TextEditingController();
   final _fullName = TextEditingController();
   final _password = TextEditingController();
+  final _confirm = TextEditingController();
   String _role = 'SinhVien';
   bool _busy = false;
+  bool _showPassword = false;
 
   @override
   void dispose() {
-    _username.dispose();
-    _email.dispose();
-    _fullName.dispose();
-    _password.dispose();
+    for (final c in [_username, _email, _fullName, _password, _confirm]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _submit() async {
-    if (!_form.currentState!.validate()) return;
+    if (_busy || !_form.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
     setState(() => _busy = true);
     final username = _username.text.trim();
     try {
@@ -51,54 +53,114 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Không được để trống' : null;
+  String? _required(String? v, String field) => (v == null || v.trim().isEmpty) ? 'Vui lòng nhập $field' : null;
 
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Đăng ký')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Form(
-          key: _form,
-          child: Column(
-            children: [
-              TextFormField(controller: _fullName, decoration: const InputDecoration(labelText: 'Họ và tên'), validator: _required),
-              const SizedBox(height: 12),
-              TextFormField(controller: _username, decoration: const InputDecoration(labelText: 'Tên đăng nhập'), validator: _required),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(labelText: 'Email'),
-                validator: (v) => (v == null || !v.contains('@')) ? 'Email không hợp lệ' : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _password,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Mật khẩu (tối thiểu 6 ký tự)'),
-                validator: (v) => (v == null || v.length < 6) ? 'Mật khẩu tối thiểu 6 ký tự' : null,
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _role,
-                decoration: const InputDecoration(labelText: 'Vai trò'),
-                items: const [
-                  DropdownMenuItem(value: 'SinhVien', child: Text('Sinh viên')),
-                  DropdownMenuItem(value: 'GiangVien', child: Text('Giảng viên')),
+      appBar: AppBar(title: const Text('Tạo tài khoản')),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+          child: AutofillGroup(
+            child: Form(
+              key: _form,
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Bạn là', style: text.titleSmall),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'SinhVien', label: Text('Sinh viên'), icon: Icon(Icons.school_outlined)),
+                      ButtonSegment(value: 'GiangVien', label: Text('Giảng viên'), icon: Icon(Icons.co_present_outlined)),
+                    ],
+                    selected: {_role},
+                    onSelectionChanged: (s) => setState(() => _role = s.first),
+                  ),
+                  const SizedBox(height: 24),
+                  Text('Thông tin cá nhân', style: text.titleSmall),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _fullName,
+                    textInputAction: TextInputAction.next,
+                    textCapitalization: TextCapitalization.words,
+                    autofillHints: const [AutofillHints.name],
+                    decoration: const InputDecoration(labelText: 'Họ và tên', prefixIcon: Icon(Icons.badge_outlined)),
+                    validator: (v) => _required(v, 'họ và tên'),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _email,
+                    textInputAction: TextInputAction.next,
+                    keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [AutofillHints.email],
+                    decoration: const InputDecoration(
+                      labelText: 'Email',
+                      prefixIcon: Icon(Icons.alternate_email_rounded),
+                      helperText: 'Mã OTP xác nhận sẽ được gửi tới email này',
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'Vui lòng nhập email';
+                      return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v.trim()) ? null : 'Email chưa đúng định dạng, ví dụ: ten@gmail.com';
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  Text('Thông tin đăng nhập', style: text.titleSmall),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _username,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.newUsername],
+                    decoration: const InputDecoration(labelText: 'Tên đăng nhập', prefixIcon: Icon(Icons.person_outline_rounded)),
+                    validator: (v) => _required(v, 'tên đăng nhập'),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _password,
+                    obscureText: !_showPassword,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.newPassword],
+                    decoration: InputDecoration(
+                      labelText: 'Mật khẩu',
+                      helperText: 'Tối thiểu 6 ký tự',
+                      prefixIcon: const Icon(Icons.lock_outline_rounded),
+                      suffixIcon: IconButton(
+                        tooltip: _showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu',
+                        icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                        onPressed: () => setState(() => _showPassword = !_showPassword),
+                      ),
+                    ),
+                    validator: (v) => (v == null || v.length < 6) ? 'Mật khẩu cần tối thiểu 6 ký tự' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _confirm,
+                    obscureText: !_showPassword,
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _submit(),
+                    decoration: const InputDecoration(labelText: 'Nhập lại mật khẩu', prefixIcon: Icon(Icons.lock_reset_rounded)),
+                    validator: (v) => v != _password.text ? 'Mật khẩu nhập lại không khớp' : null,
+                  ),
+                  const SizedBox(height: 32),
+                  FilledButton(
+                    onPressed: _busy ? null : _submit,
+                    child: _busy
+                        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
+                        : const Text('Đăng ký và nhận mã OTP'),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Tài khoản chỉ được kích hoạt sau khi bạn nhập đúng mã OTP.',
+                    style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                    textAlign: TextAlign.center,
+                  ),
                 ],
-                onChanged: (v) => setState(() => _role = v ?? 'SinhVien'),
               ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: Text(_busy ? 'Đang gửi...' : 'Đăng ký và nhận OTP'),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),

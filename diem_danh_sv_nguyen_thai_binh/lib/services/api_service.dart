@@ -87,17 +87,35 @@ class ApiService {
     return _map(await _send(() => _dio.post('/api/auth/login/verify', data: {'username': username, 'code': code})));
   }
 
+  // account: tên đăng nhập hoặc email.
+  Future<Json> forgotPassword(String account) async {
+    return _map(await _send(() => _dio.post('/api/auth/forgot-password', data: {'account': account})));
+  }
+
+  Future<Json> resetPassword({required String account, required String code, required String newPassword}) async {
+    return _map(await _send(() => _dio.post('/api/auth/reset-password', data: {
+          'account': account,
+          'code': code,
+          'newPassword': newPassword,
+        })));
+  }
+
   // Lớp và buổi học
   Future<List<Json>> classes() async => _list(await _send(() => _dio.get('/api/classes')));
+
+  // Chi tiết lớp; sinh viên nhận thêm myStats (có mặt, vắng, có phép, còn được nghỉ).
+  Future<Json> classDetail(int classId) async => _map(await _send(() => _dio.get('/api/classes/$classId')));
 
   Future<List<Json>> sessions(int classId) async =>
       _list(await _send(() => _dio.get('/api/classes/$classId/sessions')));
 
+  // durationMinutes: thời gian mở điểm danh; null = mở đến khi giảng viên đóng.
   Future<Json> createSession(int classId, {
     required String title,
     required double latitude,
     required double longitude,
     required double radiusMeters,
+    int? durationMinutes,
   }) async {
     return _map(await _send(() => _dio.post('/api/classes/$classId/sessions', data: {
           'title': title,
@@ -105,12 +123,33 @@ class ApiService {
           'latitude': latitude,
           'longitude': longitude,
           'radiusMeters': radiusMeters,
+          'durationMinutes': durationMinutes,
         })));
   }
 
   Future<void> closeSession(int sessionId) async {
     await _send(() => _dio.post('/api/sessions/$sessionId/close'));
   }
+
+  Future<Json> reopenSession(int sessionId, int minutes) async {
+    return _map(await _send(() => _dio.post('/api/sessions/$sessionId/reopen', data: {'minutes': minutes})));
+  }
+
+  // Cả lớp trong một buổi với trạng thái Present / Excused / PendingLeave / Absent.
+  Future<List<Json>> roster(int sessionId) async =>
+      _list(await _send(() => _dio.get('/api/sessions/$sessionId/roster')));
+
+  Future<void> manualCheckIn(int sessionId, int studentId) async {
+    await _send(() => _dio.post('/api/sessions/$sessionId/manual-checkin', data: {'studentId': studentId}));
+  }
+
+  Future<void> removeAttendance(int sessionId, int studentId) async {
+    await _send(() => _dio.delete('/api/sessions/$sessionId/attendances/$studentId'));
+  }
+
+  // Sinh viên chưa có trong lớp, dùng khi thêm sinh viên.
+  Future<List<Json>> classCandidates(int classId, {String query = ''}) async =>
+      _list(await _send(() => _dio.get('/api/classes/$classId/candidates', queryParameters: {'q': query})));
 
   Future<List<Json>> attendances(int sessionId) async =>
       _list(await _send(() => _dio.get('/api/sessions/$sessionId/attendances')));
@@ -201,11 +240,35 @@ class ApiService {
     await _send(() => _dio.delete('/api/subjects/$id'));
   }
 
-  Future<void> createClass(String name, int subjectId, int teacherId) async {
-    await _send(() => _dio.post('/api/classes', data: {'name': name, 'subjectId': subjectId, 'teacherId': teacherId}));
+  // data: name, subjectId, teacherId, room, schedule, plannedSessions.
+  // Khi giảng viên tạo/sửa lớp, server luôn gán chính giảng viên đó (bỏ qua teacherId).
+  Future<void> createClass(Json data) async {
+    await _send(() => _dio.post('/api/classes', data: data));
   }
 
   Future<void> deleteClass(int id) async {
     await _send(() => _dio.delete('/api/classes/$id'));
+  }
+
+  Future<void> updateUser(int id, {
+    required String email,
+    required String fullName,
+    required String role,
+    required bool isActive,
+  }) async {
+    await _send(() => _dio.put('/api/users/$id', data: {
+          'email': email,
+          'fullName': fullName,
+          'role': role,
+          'isActive': isActive,
+        }));
+  }
+
+  Future<void> updateSubject(int id, String code, String name) async {
+    await _send(() => _dio.put('/api/subjects/$id', data: {'code': code, 'name': name}));
+  }
+
+  Future<void> updateClass(int id, Json data) async {
+    await _send(() => _dio.put('/api/classes/$id', data: data));
   }
 }

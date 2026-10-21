@@ -3,34 +3,59 @@ import 'package:provider/provider.dart';
 
 import '../../core/ui.dart';
 import '../../services/api_service.dart';
+import '../../widgets/common.dart';
 
-class MyLeavesScreen extends StatelessWidget {
-  const MyLeavesScreen({super.key});
+// Tab "Đơn nghỉ" của sinh viên.
+class MyLeavesView extends StatefulWidget {
+  const MyLeavesView({super.key});
+
+  @override
+  State<MyLeavesView> createState() => _MyLeavesViewState();
+}
+
+class _MyLeavesViewState extends State<MyLeavesView> {
+  late Future<List<Json>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = context.read<ApiService>().myLeaves();
+  }
+
+  Future<void> _reload() async {
+    setState(() => _future = context.read<ApiService>().myLeaves());
+    try {
+      await _future;
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Đơn xin nghỉ của tôi')),
-      body: FutureBuilder<List<Json>>(
-        future: context.read<ApiService>().myLeaves(),
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
-          if (snap.hasError) return Center(child: Text(snap.error.toString()));
-          final list = snap.data!;
-          if (list.isEmpty) return const Center(child: Text('Bạn chưa gửi đơn nào.'));
-          return ListView.builder(
-            itemCount: list.length,
-            itemBuilder: (context, i) {
-              final l = list[i];
-              return ListTile(
-                title: Text(l['session'].toString()),
-                subtitle: Text('${l['reason']}\n${formatDateTime(l['createdAt'].toString())}'),
-                isThreeLine: true,
-                trailing: Chip(label: Text(leaveStatusLabel(l['status'].toString()))),
-              );
-            },
-          );
-        },
+    final text = Theme.of(context).textTheme;
+    return AsyncListView(
+      future: _future,
+      onRefresh: _reload,
+      emptyIcon: Icons.assignment_outlined,
+      emptyTitle: 'Chưa có đơn xin nghỉ',
+      emptyMessage: 'Vào một lớp học, chọn buổi học rồi bấm "Xin nghỉ" để gửi đơn.',
+      itemBuilder: (context, l) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: Text(l['session'].toString(), style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600))),
+                  leaveStatusChip(l['status'].toString()),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(l['reason'].toString(), style: text.bodyMedium),
+              InfoLine(icon: Icons.schedule_rounded, text: 'Gửi lúc ${formatDateTime(l['createdAt'].toString())}'),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -89,6 +89,9 @@ namespace NguyenThaiBinh.Migrations
                     b.Property<double>("DistanceMeters")
                         .HasColumnType("float");
 
+                    b.Property<bool>("IsManual")
+                        .HasColumnType("bit");
+
                     b.Property<double>("Latitude")
                         .HasColumnType("float");
 
@@ -125,6 +128,19 @@ namespace NguyenThaiBinh.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)");
 
+                    b.Property<int>("PlannedSessions")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(15);
+
+                    b.Property<string>("Room")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<string>("Schedule")
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
                     b.Property<int>("SubjectId")
                         .HasColumnType("int");
 
@@ -150,6 +166,9 @@ namespace NguyenThaiBinh.Migrations
 
                     b.Property<int>("ClassRoomId")
                         .HasColumnType("int");
+
+                    b.Property<DateTime?>("EndsAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<bool>("IsOpen")
                         .HasColumnType("bit");

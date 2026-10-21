@@ -9,5 +9,6 @@ public interface ISessionRepository
     void AddSession(ClassSession session);
     void RemoveSession(ClassSession session);
     void AddAttendance(Attendance attendance);
+    void RemoveAttendance(Attendance attendance);
     Task<bool> SaveAsync();
 }

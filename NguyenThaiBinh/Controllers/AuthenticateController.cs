@@ -80,6 +80,36 @@ public class AuthenticateController(
         return Ok(new { token = jwt.CreateToken(user), role = user.Role, fullName = user.FullName });
     }
 
+    // Quên mật khẩu bước 1: gửi OTP về email của tài khoản.
+    // Luôn trả cùng một thông báo để không lộ tài khoản nào tồn tại.
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest req)
+    {
+        var user = await FindByAccountAsync(req.Account);
+        if (user is not null && user.IsActive) await SendOtpAsync(user, OtpPurpose.ResetPassword);
+        return Ok(new { message = "Nếu tài khoản tồn tại, mã OTP đặt lại mật khẩu đã được gửi tới email đăng ký." });
+    }
+
+    // Quên mật khẩu bước 2: kiểm tra OTP rồi đặt mật khẩu mới.
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest req)
+    {
+        if (req.NewPassword.Length < 6) return BadRequest("Mật khẩu mới tối thiểu 6 ký tự.");
+        var user = await FindByAccountAsync(req.Account);
+        if (user is null || !user.IsActive || !await ConsumeOtpAsync(user, OtpPurpose.ResetPassword, req.Code))
+            return BadRequest("Mã OTP không đúng hoặc đã hết hạn.");
+
+        user.PasswordHash = hasher.HashPassword(user, req.NewPassword);
+        await users.SaveAsync();
+        return Ok(new { message = "Đã đặt lại mật khẩu. Hãy đăng nhập bằng mật khẩu mới." });
+    }
+
+    private Task<AppUser?> FindByAccountAsync(string account)
+    {
+        var value = account.Trim();
+        return users.Users().FirstOrDefaultAsync(u => u.Username == value || u.Email == value);
+    }
+
     private async Task SendOtpAsync(AppUser user, OtpPurpose purpose)
     {
         var stale = await users.OtpCodes().Where(o => o.UserId == user.Id && o.Purpose == purpose && !o.IsUsed).ToListAsync();
@@ -95,7 +125,17 @@ public class AuthenticateController(
         });
         await users.SaveAsync();
 
-        await email.SendAsync(user.Email, "Mã OTP - Điểm danh SV", $"Mã OTP của bạn là {code}. Có hiệu lực trong 5 phút.");
+        var action = purpose switch
+        {
+            OtpPurpose.Register => "xác nhận đăng ký",
+            OtpPurpose.Login => "đăng nhập",
+            _ => "đặt lại mật khẩu"
+        };
+        await email.SendAsync(
+            user.Email,
+            $"Mã OTP {action} - Điểm danh SV",
+            $"Mã OTP {action} của bạn là {code}. Có hiệu lực trong 5 phút.\n" +
+            "Nếu bạn không thực hiện yêu cầu này, hãy bỏ qua email.");
     }
 
     // Kiểm tra OTP mới nhất. Sai 5 lần thì mã bị vô hiệu.

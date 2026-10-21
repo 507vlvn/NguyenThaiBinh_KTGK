@@ -10,6 +10,7 @@ public class SessionRepository(ApplicationDbContext db) : ISessionRepository
     public void AddSession(ClassSession session) => db.ClassSessions.Add(session);
     public void RemoveSession(ClassSession session) => db.ClassSessions.Remove(session);
     public void AddAttendance(Attendance attendance) => db.Attendances.Add(attendance);
+    public void RemoveAttendance(Attendance attendance) => db.Attendances.Remove(attendance);
 
     public Task<bool> SaveAsync() => db.TrySaveAsync();
 }

@@ -43,6 +43,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(x => new { x.ClassSessionId, x.StudentId }).IsUnique();
         });
         b.Entity<Subject>(e => e.HasIndex(x => x.Code).IsUnique());
+        // Lớp đã có trước khi thêm cột này sẽ nhận giá trị 15 buổi.
+        b.Entity<ClassRoom>(e => e.Property(x => x.PlannedSessions).HasDefaultValue(15));
         b.Entity<Enrollment>(e => e.HasIndex(x => new { x.ClassRoomId, x.StudentId }).IsUnique());
         b.Entity<Attendance>(e => e.HasIndex(x => new { x.ClassSessionId, x.StudentId }).IsUnique());
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 
+import 'core/theme.dart';
 import 'core/token_storage.dart';
 import 'providers/auth_provider.dart';
 import 'screens/auth/login_screen.dart';
@@ -30,14 +31,37 @@ class DiemDanhApp extends StatelessWidget {
     return MaterialApp(
       title: 'Điểm danh SV',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: ThemeMode.system,
       home: Consumer<AuthProvider>(
         builder: (context, auth, _) {
-          if (!auth.ready) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
-          }
+          if (!auth.ready) return const _SplashScreen();
           return auth.isLoggedIn ? const HomeScreen() : const LoginScreen();
         },
+      ),
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.how_to_reg_rounded, size: 64, color: scheme.primary),
+            const SizedBox(height: 16),
+            Text('Điểm danh SV', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 24),
+            const CircularProgressIndicator(),
+          ],
+        ),
       ),
     );
   }

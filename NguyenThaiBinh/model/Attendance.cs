@@ -12,4 +12,6 @@ public class Attendance
     public double Longitude { get; set; }
     public double DistanceMeters { get; set; }
     public string? PhotoPath { get; set; }
+    // true khi giảng viên điểm danh hộ (ví dụ sinh viên hỏng điện thoại).
+    public bool IsManual { get; set; }
 }
