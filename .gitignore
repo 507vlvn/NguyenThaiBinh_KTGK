@@ -1,0 +1,12 @@
+## .NET build output
+bin/
+obj/
+*.user
+.vs/
+
+## Ảnh điểm danh và minh chứng đơn nghỉ (dữ liệu runtime)
+Uploads/
+
+## Cấu hình nhạy cảm: dùng user secrets, không commit
+appsettings.Production.json
+appsettings.Development.json.local
