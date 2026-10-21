@@ -7,21 +7,32 @@ import '../core/token_storage.dart';
 typedef Json = Map<String, dynamic>;
 
 class ApiService {
-  ApiService(this._storage)
+  ApiService(this._storage, {this.onUnauthorized})
       : _dio = Dio(BaseOptions(
           baseUrl: Config_URL.baseUrl,
           connectTimeout: const Duration(seconds: 15),
           receiveTimeout: const Duration(seconds: 30),
         )) {
-    _dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) async {
-      final token = await _storage.token;
-      if (token != null) options.headers['Authorization'] = 'Bearer $token';
-      handler.next(options);
-    }));
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        final token = await _storage.token;
+        if (token != null) options.headers['Authorization'] = 'Bearer $token';
+        handler.next(options);
+      },
+      // 401 ngoài các API đăng nhập = token hết hạn hoặc không còn hợp lệ.
+      onError: (e, handler) {
+        final authCall = e.requestOptions.path.startsWith('/api/auth/');
+        if (e.response?.statusCode == 401 && !authCall) onUnauthorized?.call();
+        handler.next(e);
+      },
+    ));
   }
 
   final TokenStorage _storage;
   final Dio _dio;
+
+  // Được gọi khi phiên đăng nhập hết hạn để app tự đăng xuất.
+  final void Function()? onUnauthorized;
 
   Future<dynamic> _send(Future<Response<dynamic>> Function() request) async {
     try {

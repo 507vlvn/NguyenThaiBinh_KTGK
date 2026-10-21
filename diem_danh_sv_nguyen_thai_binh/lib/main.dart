@@ -9,15 +9,27 @@ import 'screens/auth/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/api_service.dart';
 
+// Dùng để đóng các màn hình đang mở và hiện thông báo khi phiên đăng nhập hết hạn.
+final _navigatorKey = GlobalKey<NavigatorState>();
+final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
 
   final storage = TokenStorage();
+  final auth = AuthProvider(storage)..restore();
+  final api = ApiService(storage, onUnauthorized: () async {
+    if (!await auth.expireSession()) return;
+    _navigatorKey.currentState?.popUntil((r) => r.isFirst);
+    _messengerKey.currentState?.showSnackBar(
+      const SnackBar(content: Text('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.')),
+    );
+  });
   runApp(MultiProvider(
     providers: [
-      Provider<ApiService>(create: (_) => ApiService(storage)),
-      ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider(storage)..restore()),
+      Provider<ApiService>.value(value: api),
+      ChangeNotifierProvider<AuthProvider>.value(value: auth),
     ],
     child: const DiemDanhApp(),
   ));
@@ -31,6 +43,8 @@ class DiemDanhApp extends StatelessWidget {
     return MaterialApp(
       title: 'Điểm danh SV',
       debugShowCheckedModeBanner: false,
+      navigatorKey: _navigatorKey,
+      scaffoldMessengerKey: _messengerKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,
